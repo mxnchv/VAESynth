@@ -119,11 +119,11 @@ void VAELookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button
     if (style == "tab")
         area.removeFromBottom (6);
 
-    const auto justification = style == "pill" || style == "icon" ? juce::Justification::centred
+    const auto justification = style == "pill" || style == "icon" || style == "toggle" ? juce::Justification::centred
                                                                   : juce::Justification::centredLeft;
     g.drawText (button.getButtonText(), area, justification);
 
-    if (style == "link" && button.getToggleState())
+    if ((style == "link" || style == "small") && button.getToggleState())
     {
         const auto textWidth = juce::GlyphArrangement::getStringWidth (font, button.getButtonText());
         g.fillRect (juce::Rectangle<float> (0.0f, (float) area.getCentreY() + font.getHeight() * 0.5f + 3.0f, textWidth, 1.0f));
@@ -133,5 +133,8 @@ void VAELookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& button
 juce::Font VAELookAndFeel::getTextButtonFont (juce::TextButton& button, int)
 {
     const auto style = button.getProperties()["style"].toString();
-    return theme::font (style == "tab" ? 15.0f : (style == "icon" ? 18.0f : 14.0f));
+    if (style == "tab")   return theme::font (15.0f);
+    if (style == "icon")  return theme::font (18.0f);
+    if (style == "small" || style == "toggle") return theme::font (12.0f);
+    return theme::font (14.0f);
 }

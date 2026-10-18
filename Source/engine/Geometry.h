@@ -68,6 +68,12 @@ namespace vae
                      m[6] * p.x + m[7] * p.y + m[8] * p.z };
         }
 
+        // For a rotation, the transpose is its inverse.
+        Mat3 transposed() const noexcept
+        {
+            return { { m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8] } };
+        }
+
         // Re-orthonormalises the rows so repeated small rotations don't drift.
         Mat3 orthonormalised() const noexcept
         {

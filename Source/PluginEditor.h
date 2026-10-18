@@ -9,7 +9,8 @@
 #include "ui/Theme.h"
 
 class VAESynthEditor final : public juce::AudioProcessorEditor,
-                             public juce::FileDragAndDropTarget
+                             public juce::FileDragAndDropTarget,
+                             private juce::Timer
 {
 public:
     explicit VAESynthEditor (VAESynthProcessor&);
@@ -33,7 +34,10 @@ private:
     SampleBar sampleBar;
     juce::TooltipWindow tooltips { this };
 
+    void timerCallback() override;
+
     bool dragHovering = false;
+    double shownTempo = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VAESynthEditor)
 };

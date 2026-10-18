@@ -81,9 +81,83 @@ namespace vae
             return values;
         }
 
+        // Fundamental of a window via YIN on a copy decimated to ~11 kHz.
+        // Returns a fractional MIDI note, or -1 when there is no clear pitch.
+        float detectPitch (const float* samples, int length, double sampleRate,
+                           std::vector<float>& decimated, std::vector<float>& difference)
+        {
+            const auto factor = juce::jmax (1, (int) std::round (sampleRate / 11025.0));
+            const auto rate = sampleRate / factor;
+            const auto n = length / factor;
+
+            decimated.resize ((size_t) juce::jmax (0, n));
+            for (int i = 0; i < n; ++i)
+            {
+                float sum = 0.0f;
+                for (int k = 0; k < factor; ++k)
+                    sum += samples[i * factor + k];
+                decimated[(size_t) i] = sum / (float) factor;
+            }
+
+            const auto maxLag = juce::jmin (n / 2, (int) (rate / 50.0));
+            const auto minLag = juce::jmax (2, (int) (rate / 1500.0));
+            const auto span = n - maxLag;
+
+            if (span < 32 || maxLag <= minLag + 2)
+                return -1.0f;
+
+            difference.assign ((size_t) maxLag + 2, 1.0f);
+            double running = 0.0;
+
+            for (int lag = 1; lag <= maxLag + 1 && lag + span <= n; ++lag)
+            {
+                double sum = 0.0;
+                for (int j = 0; j < span; ++j)
+                {
+                    const auto delta = decimated[(size_t) j] - decimated[(size_t) (j + lag)];
+                    sum += (double) delta * delta;
+                }
+
+                running += sum;
+                difference[(size_t) lag] = running > 0.0 ? (float) (sum * lag / running) : 1.0f;
+            }
+
+            int best = -1;
+            for (int lag = minLag; lag < maxLag; ++lag)
+            {
+                if (difference[(size_t) lag] < 0.15f)
+                {
+                    while (lag + 1 < maxLag && difference[(size_t) (lag + 1)] < difference[(size_t) lag])
+                        ++lag;
+                    best = lag;
+                    break;
+                }
+            }
+
+            if (best < 0)
+            {
+                best = minLag;
+                for (int lag = minLag; lag < maxLag; ++lag)
+                    if (difference[(size_t) lag] < difference[(size_t) best])
+                        best = lag;
+
+                if (difference[(size_t) best] > 0.3f)
+                    return -1.0f;
+            }
+
+            auto refined = (double) best;
+            const auto a = difference[(size_t) (best - 1)], b = difference[(size_t) best], c = difference[(size_t) (best + 1)];
+            const auto curvature = a - 2.0f * b + c;
+            if (curvature > 1.0e-9f)
+                refined += 0.5 * (a - c) / curvature;
+
+            const auto frequency = rate / refined;
+            return (float) (69.0 + 12.0 * std::log2 (frequency / 440.0));
+        }
+
         FeatureVector measureWindow (const float* samples, int length, double sampleRate,
                                      juce::dsp::FFT& fft, const std::vector<float>& window,
-                                     std::vector<float>& fftData, float& rmsDb)
+                                     std::vector<float>& fftData, float& rmsDb, Chroma& chroma)
         {
             double sumSquares = 0.0;
             int zeroCrossings = 0;
@@ -115,6 +189,38 @@ namespace vae
                 weightedSum += mag * b * binHz;
                 logSum += std::log (mag);
             }
+
+            // Chroma from spectral peaks only, each at its interpolated frequency:
+            // whole bins smear a low note over its neighbouring semitones.
+            chroma.fill (0.0f);
+            float chromaTotal = 0.0f, peakLevel = 0.0f;
+            for (int b = 1; b < bins; ++b)
+                peakLevel = juce::jmax (peakLevel, fftData[(size_t) b]);
+
+            for (int b = 2; b < bins - 1; ++b)
+            {
+                const auto m = fftData[(size_t) b];
+                if (m <= fftData[(size_t) (b - 1)] || m < fftData[(size_t) (b + 1)] || m < peakLevel * 0.01f)
+                    continue;
+
+                const auto a = std::log (fftData[(size_t) (b - 1)] + 1.0e-12f), c = std::log (fftData[(size_t) (b + 1)] + 1.0e-12f);
+                const auto centre = std::log (m + 1.0e-12f);
+                const auto curvature = a - 2.0f * centre + c;
+                const auto offset = curvature < -1.0e-9f ? 0.5f * (a - c) / curvature : 0.0f;
+                const auto frequency = (b + juce::jlimit (-0.5f, 0.5f, offset)) * binHz;
+
+                if (frequency < 55.0 || frequency > 5000.0)
+                    continue;
+
+                const auto note = (int) std::round (69.0 + 12.0 * std::log2 (frequency / 440.0));
+                const auto energy = m * m;
+                chroma[(size_t) (((note % 12) + 12) % 12)] += energy;
+                chromaTotal += energy;
+            }
+
+            if (chromaTotal > 0.0f)
+                for (auto& c : chroma)
+                    c /= chromaTotal;
 
             const auto centroid = magSum > 0.0 ? weightedSum / magSum : 0.0;
             const auto flatness = std::exp (logSum / (bins - 1)) / (magSum / (bins - 1));
@@ -161,15 +267,32 @@ namespace vae
         juce::dsp::WindowingFunction<float>::fillWindowingTables (window.data(), (size_t) fftSize,
                                                                   juce::dsp::WindowingFunction<float>::hann, false);
 
+        std::vector<float> decimated, difference;
+        std::vector<float> pitches;
+
         for (int start = 0; start + windowLength <= numSamples; start += hop)
         {
             float rmsDb = 0.0f;
-            const auto features = measureWindow (data + start, windowLength, sampleRate, fft, window, fftData, rmsDb);
+            Chroma chroma {};
+            const auto features = measureWindow (data + start, windowLength, sampleRate, fft, window, fftData, rmsDb, chroma);
 
             if (rmsDb < silenceDb)
                 continue;
 
-            source->grains.push_back ({ start, (float) start / (float) juce::jmax (1, numSamples - windowLength), features });
+            const auto pitch = rmsDb > -45.0f ? detectPitch (data + start, windowLength, sampleRate, decimated, difference) : -1.0f;
+            if (pitch >= 0.0f)
+                pitches.push_back (pitch);
+
+            source->grains.push_back ({ start, (float) start / (float) juce::jmax (1, numSamples - windowLength),
+                                        features, pitch, chroma });
+        }
+
+        // A sample counts as pitched when at least 30 % of its grains are; its
+        // root is then the median grain pitch.
+        if (! source->grains.empty() && (float) pitches.size() >= 0.3f * (float) source->grains.size())
+        {
+            std::nth_element (pitches.begin(), pitches.begin() + (std::ptrdiff_t) (pitches.size() / 2), pitches.end());
+            source->detectedRoot = juce::jlimit (0, 127, (int) std::round (pitches[pitches.size() / 2]));
         }
 
         return source;
@@ -362,8 +485,12 @@ namespace vae
             return map;
 
         for (int s = 0; s < (int) map->sources.size(); ++s)
-            for (const auto& grain : map->sources[(size_t) s]->grains)
-                map->grains.push_back ({ s, grain.start, grain.timeNorm, map->projection.project (grain.features) });
+        {
+            const auto& sourceGrains = map->sources[(size_t) s]->grains;
+            for (int g = 0; g < (int) sourceGrains.size(); ++g)
+                map->grains.push_back ({ s, g, sourceGrains[(size_t) g].start, sourceGrains[(size_t) g].timeNorm,
+                                         map->projection.project (sourceGrains[(size_t) g].features) });
+        }
 
         return map;
     }

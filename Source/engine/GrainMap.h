@@ -17,11 +17,15 @@ namespace vae
     constexpr int numFeatures = 5;
     using FeatureVector = std::array<float, numFeatures>;
 
+    using Chroma = std::array<float, 12>;  // energy per pitch class, C first, sums to 1
+
     struct GrainInfo
     {
         int start = 0;          // first sample of the analysis window
         float timeNorm = 0.0f;  // position in the sample, 0 = start, 1 = end
         FeatureVector features {};
+        float pitch = -1.0f;    // MIDI note (fractional); negative when the grain has no clear pitch
+        Chroma chroma {};
     };
 
     struct SampleSource
@@ -31,6 +35,8 @@ namespace vae
         juce::AudioBuffer<float> audio;  // mono
         double sampleRate = 44100.0;
         std::vector<GrainInfo> grains;
+        int detectedRoot = -1;  // most common pitch, or -1 for unpitched material
+        int slot = 0;           // stable index for colour and per-sample settings
     };
 
     using SampleSourcePtr = std::shared_ptr<const SampleSource>;
@@ -66,7 +72,8 @@ namespace vae
 
     struct MapGrain
     {
-        int source = 0;
+        int source = 0;         // index into GrainMap::getSources()
+        int grainIndex = 0;     // index into that source's grains
         int start = 0;
         float timeNorm = 0.0f;
         Vec3 position;

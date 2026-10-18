@@ -4,119 +4,60 @@ namespace
 {
     constexpr int knobWidth = 92;
     constexpr int knobHeight = 100;
+    constexpr int syncKnobHeight = 124;
     constexpr int sectionTitleHeight = 28;
 
-    void placeRow (juce::Rectangle<int>& area, std::initializer_list<juce::Component*> components, int columns)
+    void placeRow (juce::Rectangle<int>& area, std::initializer_list<juce::Component*> components, int columns, int height = knobHeight)
     {
-        auto row = area.removeFromTop (knobHeight);
+        auto row = area.removeFromTop (height);
         const auto cell = row.getWidth() / columns;
         for (auto* c : components)
-            c->setBounds (row.removeFromLeft (cell).withSizeKeepingCentre (knobWidth, knobHeight));
+        {
+            const auto h = dynamic_cast<SyncableKnob*> (c) != nullptr ? syncKnobHeight : knobHeight;
+            c->setBounds (row.removeFromLeft (cell).withSizeKeepingCentre (knobWidth, h).withY (row.getY()));
+        }
         area.removeFromTop (16);
     }
-}
 
-//==============================================================================
-RootNoteList::RootNoteList (VAESynthProcessor& p) : processor (p) {}
-
-void RootNoteList::setMap (vae::GrainMap::Ptr map)
-{
-    for (auto& row : rows)
+    juce::String keyModeHint (int mode)
     {
-        removeChildComponent (row.down.get());
-        removeChildComponent (row.up.get());
-    }
-
-    rows.clear();
-
-    if (map != nullptr)
-    {
-        const auto& sources = map->getSources();
-        for (int i = 0; i < (int) sources.size(); ++i)
+        switch (mode)
         {
-            Row row { sources[(size_t) i]->name, theme::sampleColour (i),
-                      std::make_unique<juce::TextButton> (juce::String::fromUTF8 ("\xe2\x88\x92")),
-                      std::make_unique<juce::TextButton> ("+") };
-
-            for (auto* button : { row.down.get(), row.up.get() })
-            {
-                buttonStyle::set (*button, "icon");
-                addAndMakeVisible (button);
-            }
-
-            row.down->setTitle ("Lower root note of " + row.name);
-            row.up->setTitle ("Raise root note of " + row.name);
-            row.down->onClick = [this, i] { processor.setRootNote (i, processor.getRootNote (i) - 1); repaint(); };
-            row.up->onClick   = [this, i] { processor.setRootNote (i, processor.getRootNote (i) + 1); repaint(); };
-            rows.push_back (std::move (row));
+            case 0:  return "Notes transpose each sample from its root note.";
+            case 1:  return "Grains keep their own pitch; with a scale they snap to it.";
+            default: return "Every pitched grain is retuned to the note you play.";
         }
     }
-
-    resized();
-    repaint();
 }
 
-void RootNoteList::resized()
-{
-    auto area = getLocalBounds();
-    for (auto& row : rows)
-    {
-        auto r = area.removeFromTop (rowHeight);
-        row.up->setBounds (r.removeFromRight (32));
-        r.removeFromRight (44);
-        row.down->setBounds (r.removeFromRight (32));
-    }
-}
-
-void RootNoteList::paint (juce::Graphics& g)
-{
-    auto area = getLocalBounds();
-
-    for (int i = 0; i < (int) rows.size(); ++i)
-    {
-        auto r = area.removeFromTop (rowHeight);
-        auto controls = r.removeFromRight (108);
-
-        g.setColour (rows[(size_t) i].colour);
-        g.fillEllipse (r.removeFromLeft (8).withSizeKeepingCentre (8, 8).toFloat());
-        r.removeFromLeft (12);
-
-        g.setColour (theme::text);
-        g.setFont (theme::font (14.0f));
-        g.drawText (rows[(size_t) i].name, r, juce::Justification::centredLeft, true);
-
-        controls.removeFromRight (32);
-        g.drawText (juce::MidiMessage::getMidiNoteName (processor.getRootNote (i), true, true, 3),
-                    controls.removeFromRight (44), juce::Justification::centred);
-    }
-}
-
-//==============================================================================
 ControlPanel::ControlPanel (VAESynthProcessor& p)
     : processor (p),
       azimuth (p.getState(), ParamIDs::azimuth, "Azimuth", true),
       elevation (p.getState(), ParamIDs::elevation, "Elevation", true),
       radius (p.getState(), ParamIDs::radius, "Radius", true),
-      speed (p.getState(), ParamIDs::trajectorySpeed, "Speed"),
+      speed (p.getState(), ParamIDs::trajectorySpeed, ParamIDs::speedSync, ParamIDs::speedMode, "Speed"),
       trajectory (p.getState(), ParamIDs::trajectoryMode, { "Manual", "Orbit", "Lissajous" }),
-      size (p.getState(), ParamIDs::grainSize, "Size"),
-      density (p.getState(), ParamIDs::density, "Density"),
+      size (p.getState(), ParamIDs::grainSize, ParamIDs::sizeSync, ParamIDs::sizeMode, "Size"),
+      density (p.getState(), ParamIDs::density, ParamIDs::densitySync, ParamIDs::densityMode, "Density"),
       spray (p.getState(), ParamIDs::spray, "Spray"),
       shape (p.getState(), ParamIDs::shape, "Shape"),
       neighbours (p.getState(), ParamIDs::neighbours, "Neighbours"),
-      keyMode (p.getState(), ParamIDs::keyMode, { "Transpose", "Texture" }),
+      keyMode (p.getState(), ParamIDs::keyMode, { "Transpose", "Texture", "Tune" }),
+      scaleRoot (p.getState(), ParamIDs::scaleRoot, "Key"),
+      scaleType (p.getState(), ParamIDs::scaleType, "Scale"),
       detune (p.getState(), ParamIDs::detune, "Detune"),
-      rootNotes (p),
+      harmonicFilter (p.getState(), ParamIDs::harmonicFilter, "Harmonic filter"),
       attack (p.getState(), ParamIDs::attack, "Attack"),
       decay (p.getState(), ParamIDs::decay, "Decay"),
       sustain (p.getState(), ParamIDs::sustain, "Sustain"),
       release (p.getState(), ParamIDs::release, "Release"),
       width (p.getState(), ParamIDs::width, "Width"),
       gain (p.getState(), ParamIDs::gain, "Gain", true),
-      velocityToRadius (p.getState(), ParamIDs::velocityToRadius, juce::String::fromUTF8 ("Velocity \xe2\x86\x92 Radius"))
+      velocityToRadius (p.getState(), ParamIDs::velocityToRadius, juce::String::fromUTF8 ("Velocity \xe2\x86\x92 Radius")),
+      sampleList (p)
 {
-    const std::pair<const char*, Tab> tabs[] { { "Space", Tab::space }, { "Grains", Tab::grains },
-                                               { "Pitch", Tab::pitch }, { "Voice", Tab::voice } };
+    const std::pair<const char*, Tab> tabs[] { { "Space", Tab::space }, { "Grains", Tab::grains }, { "Pitch", Tab::pitch },
+                                               { "Voice", Tab::voice }, { "Samples", Tab::samples } };
 
     for (const auto& [name, t] : tabs)
     {
@@ -126,10 +67,21 @@ ControlPanel::ControlPanel (VAESynthProcessor& p)
         addAndMakeVisible (button);
     }
 
+    sampleViewport.setViewedComponent (&sampleList, false);
+    sampleViewport.setScrollBarsShown (true, false);
+    sampleViewport.setScrollBarThickness (6);
+
+    buttonStyle::set (clearButton, "small");
+    clearButton.setToggleState (true, juce::dontSendNotification);
+    clearButton.onClick = [this] { processor.clearSamples(); };
+
+    keyMode.onChange = [this] (int) { repaint (hintArea); };
+
     for (auto* c : std::initializer_list<juce::Component*> { &azimuth, &elevation, &radius, &speed, &trajectory,
                                                              &size, &density, &spray, &shape, &neighbours,
-                                                             &keyMode, &detune, &rootNotes,
-                                                             &attack, &decay, &sustain, &release, &width, &gain, &velocityToRadius })
+                                                             &keyMode, &scaleRoot, &scaleType, &detune, &harmonicFilter,
+                                                             &attack, &decay, &sustain, &release, &width, &gain, &velocityToRadius,
+                                                             &sampleViewport, &clearButton })
         addChildComponent (c);
 
     showTab (Tab::space);
@@ -143,21 +95,17 @@ void ControlPanel::showTab (Tab newTab)
     for (int i = 0; i < tabButtons.size(); ++i)
         tabButtons[i]->setToggleState (i == (int) tab, juce::dontSendNotification);
 
-    const auto space = tab == Tab::space, grains = tab == Tab::grains, pitch = tab == Tab::pitch, voice = tab == Tab::voice;
+    auto show = [] (std::initializer_list<juce::Component*> components, bool visible)
+    {
+        for (auto* c : components)
+            c->setVisible (visible);
+    };
 
-    for (auto* c : { (juce::Component*) &azimuth, (juce::Component*) &elevation, (juce::Component*) &radius,
-                     (juce::Component*) &speed, (juce::Component*) &trajectory })
-        c->setVisible (space);
-
-    for (auto* c : { &size, &density, &spray, &shape, &neighbours })
-        c->setVisible (grains);
-
-    keyMode.setVisible (pitch);
-    detune.setVisible (pitch);
-    rootNotes.setVisible (pitch);
-
-    for (auto* c : { &attack, &decay, &sustain, &release, &width, &gain, &velocityToRadius })
-        c->setVisible (voice);
+    show ({ &azimuth, &elevation, &radius, &speed, &trajectory }, tab == Tab::space);
+    show ({ &size, &density, &spray, &shape, &neighbours }, tab == Tab::grains);
+    show ({ &keyMode, &scaleRoot, &scaleType, &detune, &harmonicFilter }, tab == Tab::pitch);
+    show ({ &attack, &decay, &sustain, &release, &width, &gain, &velocityToRadius }, tab == Tab::voice);
+    show ({ &sampleViewport, &clearButton }, tab == Tab::samples);
 
     resized();
     repaint();
@@ -166,14 +114,14 @@ void ControlPanel::showTab (Tab newTab)
 void ControlPanel::resized()
 {
     sectionTitles.clear();
-    nowPlayingArea = {};
+    nowPlayingArea = hintArea = samplesHeaderArea = {};
 
     auto area = getLocalBounds();
     auto tabRow = area.removeFromTop (60).reduced (28, 0).withTrimmedTop (16);
     for (auto* button : tabButtons)
     {
         button->setBounds (tabRow.removeFromLeft (juce::roundToInt (juce::GlyphArrangement::getStringWidth (theme::font (15.0f), button->getButtonText())) + 2));
-        tabRow.removeFromLeft (28);
+        tabRow.removeFromLeft (24);
     }
 
     area.reduce (28, 22);
@@ -186,7 +134,7 @@ void ControlPanel::resized()
     switch (tab)
     {
         case Tab::space:
-            placeRow (area, { &azimuth, &elevation, &radius, &speed }, 4);
+            placeRow (area, { &azimuth, &elevation, &radius, &speed }, 4, syncKnobHeight);
             addTitle ("Trajectory");
             trajectory.setBounds (area.removeFromTop (32));
             area.removeFromTop (24);
@@ -194,17 +142,25 @@ void ControlPanel::resized()
             break;
 
         case Tab::grains:
-            placeRow (area, { &size, &density, &spray }, 3);
+            placeRow (area, { &size, &density, &spray }, 3, syncKnobHeight);
             placeRow (area, { &shape, &neighbours }, 3);
             break;
 
         case Tab::pitch:
+        {
             keyMode.setBounds (area.removeFromTop (32));
+            hintArea = area.removeFromTop (24);
             area.removeFromTop (16);
-            placeRow (area, { &detune }, 4);
-            addTitle ("Root note per sample");
-            rootNotes.setBounds (area);
+
+            auto selectors = area.removeFromTop (44);
+            scaleRoot.setBounds (selectors.removeFromLeft (110));
+            selectors.removeFromLeft (24);
+            scaleType.setBounds (selectors.removeFromLeft (200));
+            area.removeFromTop (24);
+
+            placeRow (area, { &detune, &harmonicFilter }, 4);
             break;
+        }
 
         case Tab::voice:
             addTitle ("Envelope");
@@ -212,6 +168,16 @@ void ControlPanel::resized()
             addTitle ("Output & expression");
             placeRow (area, { &width, &gain, &velocityToRadius }, 4);
             break;
+
+        case Tab::samples:
+        {
+            samplesHeaderArea = area.removeFromTop (sectionTitleHeight);
+            clearButton.setBounds (samplesHeaderArea.withLeft (samplesHeaderArea.getRight() - 60));
+            area.removeFromTop (8);
+            sampleViewport.setBounds (area);
+            sampleList.setSize (area.getWidth() - 8, sampleList.getIdealHeight());
+            break;
+        }
     }
 }
 
@@ -223,6 +189,29 @@ void ControlPanel::paint (juce::Graphics& g)
 
     for (const auto& [title, area] : sectionTitles)
         theme::drawSectionTitle (g, title, area);
+
+    if (tab == Tab::pitch)
+    {
+        g.setColour (theme::muted);
+        g.setFont (theme::font (12.0f));
+        g.drawText (keyModeHint (juce::roundToInt (processor.getState().getRawParameterValue (ParamIDs::keyMode.getParamID())->load())),
+                    hintArea, juce::Justification::centredLeft, true);
+    }
+
+    if (tab == Tab::samples)
+    {
+        const auto count = shownMap != nullptr ? (int) shownMap->getSources().size() : 0;
+        theme::drawSectionTitle (g, "Samples  " + juce::String (count) + " / " + juce::String (VAESynthProcessor::maxSamples),
+                                 samplesHeaderArea);
+
+        if (count == 0)
+        {
+            g.setColour (theme::muted);
+            g.setFont (theme::font (13.0f));
+            g.drawText ("Drop audio files on the sphere to add samples.",
+                        samplesHeaderArea.translated (0, 40), juce::Justification::centredLeft, true);
+        }
+    }
 
     if (tab != Tab::space || nowPlayingArea.isEmpty())
         return;
@@ -270,7 +259,12 @@ void ControlPanel::timerCallback()
     if (map != shownMap)
     {
         shownMap = map;
-        rootNotes.setMap (map);
+        sampleList.setMap (map);
+        if (tab == Tab::samples)
+        {
+            resized();
+            repaint();
+        }
     }
 
     if (tab == Tab::space)
@@ -292,20 +286,31 @@ void ControlPanel::updateNowPlaying()
     if (shownMap != nullptr && ! shownMap->getGrains().empty())
     {
         const auto& grains = shownMap->getGrains();
-        const auto numSources = shownMap->getSources().size();
+        const auto& sources = shownMap->getSources();
         const auto k = (size_t) juce::roundToInt (processor.getState().getRawParameterValue (ParamIDs::neighbours.getParamID())->load());
+
+        bool anySolo = false;
+        for (const auto& source : sources)
+            anySolo = anySolo || processor.isSoloed (source->slot);
+
+        auto audible = [&] (size_t sourceIndex)
+        {
+            const auto slot = sources[sourceIndex]->slot;
+            return anySolo ? processor.isSoloed (slot) : ! processor.isMuted (slot);
+        };
 
         std::vector<std::pair<float, size_t>> distances;
         distances.reserve (grains.size());
         for (size_t i = 0; i < grains.size(); ++i)
-            distances.push_back ({ (grains[i].position - point).lengthSquared(), i });
+            if (audible ((size_t) grains[i].source))
+                distances.push_back ({ (grains[i].position - point).lengthSquared(), i });
 
         const auto count = juce::jmin (k, distances.size());
         std::partial_sort (distances.begin(), distances.begin() + (std::ptrdiff_t) count, distances.end());
 
         // Same rule as the engine: nearest grains weighted by distance, blended
         // towards the whole map as the cursor approaches the centre.
-        std::vector<float> nearShare (numSources, 0.0f), overallShare (numSources, 0.0f);
+        std::vector<float> nearShare (sources.size(), 0.0f), overallShare (sources.size(), 0.0f);
         float total = 0.0f;
         for (size_t i = 0; i < count; ++i)
         {
@@ -314,12 +319,12 @@ void ControlPanel::updateNowPlaying()
             total += w;
         }
 
-        for (const auto& grain : grains)
-            overallShare[(size_t) grain.source] += 1.0f / (float) grains.size();
+        for (const auto& [d, index] : distances)
+            overallShare[(size_t) grains[index].source] += 1.0f / (float) juce::jmax<size_t> (1, distances.size());
 
         const auto blend = juce::jmin (1.0f, distance);
-        for (size_t s = 0; s < numSources; ++s)
-            mix.push_back ({ shownMap->getSources()[s]->name, theme::sampleColour ((int) s),
+        for (size_t s = 0; s < sources.size(); ++s)
+            mix.push_back ({ sources[s]->name, theme::sampleColour (sources[s]->slot),
                              blend * (total > 0.0f ? nearShare[s] / total : 0.0f) + (1.0f - blend) * overallShare[s] });
 
         std::sort (mix.begin(), mix.end(), [] (const MixRow& a, const MixRow& b) { return a.share > b.share; });

@@ -34,6 +34,15 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Sign and add installer (macOS)
+        if: runner.os == 'macOS'
+        working-directory: build/VAESynth_artefacts/Release
+        run: |
+          for bundle in VST3/VAESynth.vst3 AU/VAESynth.component CLAP/VAESynth.clap Standalone/VAESynth.app; do
+            codesign --force --deep --sign - "$bundle"
+          done
+          cp "$GITHUB_WORKSPACE/packaging/macos/install.sh" .
+
       - name: Upload plugins
         uses: actions/upload-artifact@v4
         with:
@@ -43,4 +52,5 @@ jobs:
             build/VAESynth_artefacts/Release/AU
             build/VAESynth_artefacts/Release/CLAP
             build/VAESynth_artefacts/Release/Standalone
+            build/VAESynth_artefacts/Release/install.sh
           if-no-files-found: error

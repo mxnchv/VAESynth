@@ -21,6 +21,16 @@ VAESynthEditor::VAESynthEditor (VAESynthProcessor& p)
     addAndMakeVisible (sampleBar);
 
     setSize (1180, 760);
+    startTimerHz (4);
+}
+
+void VAESynthEditor::timerCallback()
+{
+    if (const auto tempo = processor.getTempo(); std::abs (tempo - shownTempo) > 0.05)
+    {
+        shownTempo = tempo;
+        repaint (getLocalBounds().removeFromTop (headerHeight));
+    }
 }
 
 VAESynthEditor::~VAESynthEditor()
@@ -38,7 +48,13 @@ void VAESynthEditor::paint (juce::Graphics& g)
     g.setFont (juce::Font (theme::lightFont (24.0f)).withExtraKerningFactor (0.42f));
     g.drawText ("VAESYNTH", header.removeFromLeft (260), juce::Justification::centredLeft);
 
+    g.setColour (theme::text);
+    g.setFont (theme::font (14.0f));
+    g.drawText (juce::String (processor.getTempo(), 1), header.removeFromLeft (52), juce::Justification::centredRight);
     g.setColour (theme::muted);
+    g.setFont (theme::font (12.0f));
+    g.drawText ("BPM", header.removeFromLeft (40), juce::Justification::centred);
+
     g.setFont (theme::font (13.0f));
     g.drawText ("v" + juce::String (JucePlugin_VersionString) + "  prototype", header, juce::Justification::centredRight);
 

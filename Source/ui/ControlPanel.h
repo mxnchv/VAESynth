@@ -4,32 +4,9 @@
 
 #include "../PluginProcessor.h"
 #include "Controls.h"
+#include "SampleList.h"
 
-// Root note editor: one row per loaded sample.
-class RootNoteList final : public juce::Component
-{
-public:
-    explicit RootNoteList (VAESynthProcessor&);
-
-    void setMap (vae::GrainMap::Ptr);
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-    static constexpr int rowHeight = 36;
-
-private:
-    struct Row
-    {
-        juce::String name;
-        juce::Colour colour;
-        std::unique_ptr<juce::TextButton> down, up;
-    };
-
-    VAESynthProcessor& processor;
-    std::vector<Row> rows;
-};
-
-// Right-hand panel with the Space / Grains / Pitch / Voice tabs.
+// Right-hand panel with the Space / Grains / Pitch / Voice / Samples tabs.
 class ControlPanel final : public juce::Component,
                            private juce::Timer
 {
@@ -40,7 +17,7 @@ public:
     void resized() override;
 
 private:
-    enum class Tab { space, grains, pitch, voice };
+    enum class Tab { space, grains, pitch, voice, samples };
 
     void timerCallback() override;
     void showTab (Tab);
@@ -51,19 +28,26 @@ private:
     juce::OwnedArray<juce::TextButton> tabButtons;
 
     // Space
-    Knob azimuth, elevation, radius, speed;
+    Knob azimuth, elevation, radius;
+    SyncableKnob speed;
     ChoiceButtons trajectory;
 
     // Grains
-    Knob size, density, spray, shape, neighbours;
+    SyncableKnob size, density;
+    Knob spray, shape, neighbours;
 
     // Pitch
     ChoiceButtons keyMode;
-    Knob detune;
-    RootNoteList rootNotes;
+    StepSelector scaleRoot, scaleType;
+    Knob detune, harmonicFilter;
 
     // Voice
     Knob attack, decay, sustain, release, width, gain, velocityToRadius;
+
+    // Samples
+    SampleList sampleList;
+    juce::Viewport sampleViewport;
+    juce::TextButton clearButton { "Clear all" };
 
     struct MixRow
     {
@@ -75,6 +59,6 @@ private:
     vae::GrainMap::Ptr shownMap;
     juce::String zone;
     std::vector<MixRow> mix;
-    juce::Rectangle<int> nowPlayingArea;
+    juce::Rectangle<int> nowPlayingArea, hintArea, samplesHeaderArea;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> sectionTitles;
 };

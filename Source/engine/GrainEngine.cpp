@@ -2,11 +2,19 @@
 
 namespace vae
 {
+    namespace
+    {
+        constexpr int maxCandidates = 64;  // nearest grains considered when the harmonic filter is on
+    }
+
     void GrainEngine::prepare (double newSampleRate, int maxBlockSize)
     {
         sampleRate = newSampleRate;
         blockCapacity = juce::jmax (1, maxBlockSize);
-        envelopeBuffer.assign ((size_t) (maxVoices * blockCapacity), 0.0f);
+        envelopeBuffer.assign ((size_t) ((maxVoices + 1) * blockCapacity), 0.0f);
+
+        // Auditioned grains belong to no voice and use this constant row.
+        std::fill (envelopeBuffer.begin() + maxVoices * blockCapacity, envelopeBuffer.end(), 1.0f);
 
         for (auto& voice : voices)
             voice.envelope.setSampleRate (sampleRate);
@@ -19,7 +27,7 @@ namespace vae
         for (auto& voice : voices)
         {
             voice.held = false;
-            voice.note = -1;
+            voice.note = voice.inputNote = -1;
             voice.envelope.reset();
         }
 
@@ -37,6 +45,8 @@ namespace vae
 
     void GrainEngine::process (juce::AudioBuffer<float>& output, const juce::MidiBuffer& midi, const EngineSettings& settings)
     {
+        soloActive = sampleSlots != nullptr && sampleSlots->anySoloed();
+
         for (auto& voice : voices)
             voice.envelope.setParameters (settings.envelope);
 
@@ -59,14 +69,14 @@ namespace vae
         {
             const auto eventPosition = juce::jlimit (position, total, metadata.samplePosition);
             renderRange (position, eventPosition - position);
-            handleMidi (metadata.getMessage());
+            handleMidi (metadata.getMessage(), settings);
             position = eventPosition;
         }
 
         renderRange (position, total - position);
     }
 
-    void GrainEngine::handleMidi (const juce::MidiMessage& message)
+    void GrainEngine::handleMidi (const juce::MidiMessage& message, const EngineSettings& settings)
     {
         if (message.isNoteOn())
         {
@@ -88,16 +98,18 @@ namespace vae
             }
 
             target->held = true;
-            target->note = message.getNoteNumber();
+            target->inputNote = message.getNoteNumber();
+            target->note = settings.scale.snap ((float) message.getNoteNumber());
             target->velocity = message.getFloatVelocity();
             target->startedAt = ++noteCounter;
             target->samplesToNextGrain = 0.0;
+            target->firstGrainPending = true;
             target->envelope.noteOn();
         }
         else if (message.isNoteOff())
         {
             for (auto& voice : voices)
-                if (voice.held && voice.note == message.getNoteNumber())
+                if (voice.held && voice.inputNote == message.getNoteNumber())
                 {
                     voice.held = false;
                     voice.envelope.noteOff();
@@ -115,7 +127,16 @@ namespace vae
 
     void GrainEngine::renderSegment (juce::AudioBuffer<float>& output, int start, int numSamples, const EngineSettings& settings)
     {
-        const auto interval = sampleRate / juce::jmax (0.1f, settings.density);
+        const auto& clock = settings.clock;
+        const auto gridLocked = clock.synced && clock.hostPlaying && clock.samplesPerBeat > 0.0 && clock.divisionBeats > 0.0;
+        const auto interval = clock.synced ? clock.divisionBeats * clock.samplesPerBeat
+                                           : sampleRate / juce::jmax (0.1f, settings.density);
+        const auto jitter = clock.synced ? 0.0 : 0.1;
+
+        auto gridIndexAt = [&] (int offset)
+        {
+            return (juce::int64) std::floor ((clock.ppqAtBlockStart + (start + offset) / clock.samplesPerBeat) / clock.divisionBeats);
+        };
 
         for (int v = 0; v < maxVoices; ++v)
         {
@@ -131,13 +152,39 @@ namespace vae
             for (int i = 0; i < numSamples; ++i)
             {
                 envelope[i] = voice.envelope.getNextSample();
-                voice.samplesToNextGrain -= 1.0;
+                auto spawn = false;
 
-                if (voice.samplesToNextGrain <= 0.0)
+                // The first grain of a note plays at once; later ones follow
+                // the host grid when synced, or the free-running interval.
+                if (voice.firstGrainPending)
                 {
-                    spawnGrain (v, i, settings);
-                    voice.samplesToNextGrain += interval * (0.9 + 0.2 * random.nextDouble());
+                    spawn = true;
+                    voice.firstGrainPending = false;
+                    voice.samplesToNextGrain = interval;
+                    if (gridLocked)
+                        voice.lastGridIndex = gridIndexAt (i);
                 }
+                else if (gridLocked)
+                {
+                    const auto index = gridIndexAt (i);
+                    if (index != voice.lastGridIndex)
+                    {
+                        spawn = true;
+                        voice.lastGridIndex = index;
+                    }
+                }
+                else
+                {
+                    voice.samplesToNextGrain -= 1.0;
+                    if (voice.samplesToNextGrain <= 0.0)
+                    {
+                        spawn = true;
+                        voice.samplesToNextGrain += interval * (1.0 - jitter + 2.0 * jitter * random.nextDouble());
+                    }
+                }
+
+                if (spawn)
+                    spawnGrain (v, i, settings);
             }
         }
 
@@ -185,19 +232,35 @@ namespace vae
         }
     }
 
+    float GrainEngine::semitoneShift (const SampleSource& source, const GrainInfo& info,
+                                      int voiceNote, const EngineSettings& settings) const noexcept
+    {
+        const auto root = sampleSlots != nullptr ? (float) sampleSlots->rootNote[(size_t) source.slot].load (std::memory_order_relaxed)
+                                                 : 60.0f;
+
+        switch (settings.pitchMode)
+        {
+            case PitchMode::transpose:
+                return (float) voiceNote - root;
+
+            case PitchMode::texture:
+                // Grains keep their own melody, nudged onto the scale when one is set.
+                return settings.scale.active && info.pitch >= 0.0f ? (float) settings.scale.snap (info.pitch) - info.pitch : 0.0f;
+
+            case PitchMode::tune:
+                // Every pitched grain lands exactly on the note played.
+                return info.pitch >= 0.0f ? (float) voiceNote - info.pitch : (float) voiceNote - root;
+        }
+
+        return 0.0f;
+    }
+
     void GrainEngine::spawnGrain (int voiceIndex, int delay, const EngineSettings& settings)
     {
         if (map == nullptr || map->getGrains().empty())
             return;
 
-        Grain* slot = nullptr;
-        for (auto& grain : grains)
-            if (! grain.active)
-            {
-                slot = &grain;
-                break;
-            }
-
+        auto* slot = freeGrainSlot();
         if (slot == nullptr)
             return;
 
@@ -211,58 +274,140 @@ namespace vae
         if (settings.spray > 0.0f)
             target = target + randomInBall() * (settings.spray * 0.5f);
 
-        const auto& mapGrains = map->getGrains();
-
         // Towards the centre the cursor hears the average of everything:
         // the closer to it, the more grains are picked from the whole map.
         const auto chosen = random.nextFloat() >= juce::jmin (1.0f, target.length())
-                              ? random.nextInt ((int) mapGrains.size())
-                              : pickGrain (target, juce::jlimit (1, maxNeighbours, settings.neighbours));
+                              ? pickAnyGrain()
+                              : pickGrain (target, voice.note, settings);
 
-        const auto& mapGrain = mapGrains[(size_t) chosen];
-        const auto* source = map->getSources()[(size_t) mapGrain.source].get();
+        if (chosen < 0)
+            return;
 
-        auto root = 60;
-        if (rootNotes != nullptr && mapGrain.source < maxSources)
-            root = (*rootNotes)[(size_t) mapGrain.source].load (std::memory_order_relaxed);
+        const auto& mapGrain = map->getGrains()[(size_t) chosen];
+        const auto& source = *map->getSources()[(size_t) mapGrain.source];
+        const auto& info = source.grains[(size_t) mapGrain.grainIndex];
 
-        auto semitones = settings.transpose ? (float) (voice.note - root) : 0.0f;
+        auto semitones = semitoneShift (source, info, voice.note, settings);
         semitones += settings.detuneCents * 0.01f * (random.nextFloat() * 2.0f - 1.0f);
+        semitones = juce::jlimit (-36.0f, 36.0f, semitones);
 
-        const auto increment = std::pow (2.0, semitones / 12.0) * source->sampleRate / sampleRate;
+        const auto increment = std::pow (2.0, semitones / 12.0) * source.sampleRate / sampleRate;
+        const auto length = (int) (settings.grainSizeMs * 0.001 * sampleRate);
+        const auto overlap = settings.clock.synced
+                               ? (float) (settings.grainSizeMs * 0.001 * sampleRate / juce::jmax (1.0, settings.clock.divisionBeats * settings.clock.samplesPerBeat))
+                               : settings.density * settings.grainSizeMs * 0.001f;
+        const auto gain = voice.velocity * 0.8f / std::sqrt (juce::jmax (1.0f, overlap));
+        const auto pan = settings.width * (random.nextFloat() * 2.0f - 1.0f);
+
+        startGrain (*slot, chosen, voiceIndex, delay, length, increment, gain, pan, settings.shape);
+    }
+
+    void GrainEngine::audition (int mapGrainIndex, const EngineSettings& settings)
+    {
+        if (map == nullptr || ! juce::isPositiveAndBelow (mapGrainIndex, (int) map->getGrains().size()))
+            return;
+
+        if (auto* slot = freeGrainSlot())
+        {
+            const auto& source = *map->getSources()[(size_t) map->getGrains()[(size_t) mapGrainIndex].source];
+            const auto length = (int) (juce::jlimit (250.0f, 600.0f, settings.grainSizeMs) * 0.001f * (float) sampleRate);
+            startGrain (*slot, mapGrainIndex, maxVoices, 0, length, source.sampleRate / sampleRate, 0.6f, 0.0f, 0.0f);
+        }
+    }
+
+    void GrainEngine::startGrain (Grain& grain, int mapGrainIndex, int voice, int delay, int length,
+                                  double increment, float gain, float pan, float shape)
+    {
+        const auto& mapGrain = map->getGrains()[(size_t) mapGrainIndex];
+        const auto* source = map->getSources()[(size_t) mapGrain.source].get();
         const auto sourceLength = source->audio.getNumSamples();
 
-        auto length = juce::jmax (16, (int) (settings.grainSizeMs * 0.001 * sampleRate));
-        length = juce::jmin (length, (int) ((sourceLength - 2) / increment));
-
+        length = juce::jmin (juce::jmax (16, length), (int) ((sourceLength - 2) / increment));
         if (length < 16)
             return;
 
         const auto span = length * increment;
-        const auto readStart = juce::jlimit (0.0, juce::jmax (0.0, sourceLength - span - 2.0), (double) mapGrain.start);
-
-        const auto overlap = settings.density * settings.grainSizeMs * 0.001f;
-        const auto gain = voice.velocity * 0.8f / std::sqrt (juce::jmax (1.0f, overlap));
-        const auto pan = settings.width * (random.nextFloat() * 2.0f - 1.0f);
         const auto angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
 
-        slot->active = true;
-        slot->source = source;
-        slot->voice = voiceIndex;
-        slot->delay = delay;
-        slot->length = length;
-        slot->position = 0;
-        slot->readPosition = readStart;
-        slot->increment = increment;
-        slot->gainLeft = gain * std::cos (angle);
-        slot->gainRight = gain * std::sin (angle);
-        slot->shape = settings.shape;
+        grain.active = true;
+        grain.source = source;
+        grain.voice = voice;
+        grain.delay = delay;
+        grain.length = length;
+        grain.position = 0;
+        grain.readPosition = juce::jlimit (0.0, juce::jmax (0.0, sourceLength - span - 2.0), (double) mapGrain.start);
+        grain.increment = increment;
+        grain.gainLeft = gain * std::cos (angle);
+        grain.gainRight = gain * std::sin (angle);
+        grain.shape = shape;
+
+        ++spawnedBySlot[(size_t) source->slot];
+
+        const auto scope = playedFifo.write (1);
+        if (scope.blockSize1 > 0)
+            played[(size_t) scope.startIndex1] = mapGrainIndex;
     }
 
-    int GrainEngine::pickGrain (Vec3 target, int neighbours)
+    GrainEngine::Grain* GrainEngine::freeGrainSlot() noexcept
     {
-        std::array<float, maxNeighbours> bestDistance {};
-        std::array<int, maxNeighbours> bestIndex {};
+        for (auto& grain : grains)
+            if (! grain.active)
+                return &grain;
+
+        return nullptr;
+    }
+
+    bool GrainEngine::isAudible (const MapGrain& grain) const noexcept
+    {
+        return sampleSlots == nullptr
+            || sampleSlots->isAudible (map->getSources()[(size_t) grain.source]->slot, soloActive);
+    }
+
+    int GrainEngine::pickAnyGrain()
+    {
+        const auto& mapGrains = map->getGrains();
+        const auto count = (int) mapGrains.size();
+        const auto first = random.nextInt (count);
+
+        for (int i = 0; i < count; ++i)
+        {
+            const auto index = (first + i) % count;
+            if (isAudible (mapGrains[(size_t) index]))
+                return index;
+        }
+
+        return -1;
+    }
+
+    float GrainEngine::harmonicFit (const MapGrain& grain, int voiceNote, const EngineSettings& settings) const noexcept
+    {
+        const auto& source = *map->getSources()[(size_t) grain.source];
+        const auto& info = source.grains[(size_t) grain.grainIndex];
+        const auto shift = (int) std::round (semitoneShift (source, info, voiceNote, settings));
+
+        // Share of the grain's energy that lands in key once it is transposed:
+        // on the scale if there is one, otherwise on the played note and its fifth.
+        float fit = 0.0f;
+        for (int pc = 0; pc < 12; ++pc)
+        {
+            const auto shifted = ((pc + shift) % 12 + 12) % 12;
+            const auto inKey = settings.scale.active ? settings.scale.contains (shifted)
+                                                     : (shifted == ((voiceNote % 12) + 12) % 12 || shifted == ((voiceNote + 7) % 12 + 12) % 12);
+            if (inKey)
+                fit += info.chroma[(size_t) pc];
+        }
+
+        return fit;
+    }
+
+    int GrainEngine::pickGrain (Vec3 target, int voiceNote, const EngineSettings& settings)
+    {
+        const auto neighbours = juce::jlimit (1, maxNeighbours, settings.neighbours);
+        const auto harmonic = settings.harmonicFilter > 0.001f;
+        const auto wanted = harmonic ? juce::jmin (maxCandidates, neighbours * 4) : neighbours;
+
+        std::array<float, maxCandidates> bestDistance {};
+        std::array<int, maxCandidates> bestIndex {};
         int count = 0;
 
         const auto& mapGrains = map->getGrains();
@@ -271,10 +416,13 @@ namespace vae
         {
             const auto d = (mapGrains[(size_t) i].position - target).lengthSquared();
 
-            if (count == neighbours && d >= bestDistance[(size_t) (count - 1)])
+            if (count == wanted && d >= bestDistance[(size_t) (count - 1)])
                 continue;
 
-            auto j = count < neighbours ? count++ : count - 1;
+            if (! isAudible (mapGrains[(size_t) i]))
+                continue;
+
+            auto j = count < wanted ? count++ : count - 1;
             while (j > 0 && bestDistance[(size_t) (j - 1)] > d)
             {
                 bestDistance[(size_t) j] = bestDistance[(size_t) (j - 1)];
@@ -286,12 +434,24 @@ namespace vae
             bestIndex[(size_t) j] = i;
         }
 
-        std::array<float, maxNeighbours> weights {};
+        if (count == 0)
+            return -1;
+
+        std::array<float, maxCandidates> weights {};
         float total = 0.0f;
+
         for (int i = 0; i < count; ++i)
         {
-            weights[(size_t) i] = 1.0f / (std::sqrt (bestDistance[(size_t) i]) + 0.05f);
-            total += weights[(size_t) i];
+            auto w = 1.0f / (std::sqrt (bestDistance[(size_t) i]) + 0.05f);
+
+            if (harmonic)
+            {
+                const auto fit = harmonicFit (mapGrains[(size_t) bestIndex[(size_t) i]], voiceNote, settings);
+                w *= (1.0f - settings.harmonicFilter) + settings.harmonicFilter * (fit * fit * fit + 1.0e-4f);
+            }
+
+            weights[(size_t) i] = w;
+            total += w;
         }
 
         auto pick = random.nextFloat() * total;
@@ -302,7 +462,7 @@ namespace vae
                 return bestIndex[(size_t) i];
         }
 
-        return bestIndex[(size_t) juce::jmax (0, count - 1)];
+        return bestIndex[(size_t) (count - 1)];
     }
 
     Vec3 GrainEngine::randomInBall()

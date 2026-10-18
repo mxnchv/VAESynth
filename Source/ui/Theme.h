@@ -43,6 +43,8 @@ public:
 //   "link" - text option, underlined under the text when selected
 //   "pill" - outlined rounded action button
 //   "icon" - plain text action (e.g. "-" / "+")
+//   "small"  - like "link", smaller (Free / Sync under a knob)
+//   "toggle" - small centred label, bright when on (M / S)
 namespace buttonStyle
 {
     inline void set (juce::Button& b, const char* style) { b.getProperties().set ("style", style); }

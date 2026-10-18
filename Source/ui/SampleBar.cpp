@@ -17,7 +17,7 @@ SampleBar::SampleBar (VAESynthProcessor& p) : processor (p)
 
 void SampleBar::chooseFiles()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Add samples", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+    chooser = std::make_unique<juce::FileChooser> ("Add samples", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.caf");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
                               | juce::FileBrowserComponent::canSelectMultipleItems,
                           [this] (const juce::FileChooser& fc) { processor.addSampleFiles (fc.getResults()); });
@@ -52,6 +52,10 @@ void SampleBar::paint (juce::Graphics& g)
     if (map != nullptr)
     {
         const auto& sources = map->getSources();
+        bool anySolo = false;
+        for (const auto& source : sources)
+            anySolo = anySolo || processor.isSoloed (source->slot);
+
         for (int i = 0; i < (int) sources.size(); ++i)
         {
             const auto& name = sources[(size_t) i]->name;
@@ -67,10 +71,13 @@ void SampleBar::paint (juce::Graphics& g)
 
             auto chip = chips.removeFromLeft (width);
             chips.removeFromLeft (18);
-            g.setColour (theme::sampleColour (i));
+            const auto slot = sources[(size_t) i]->slot;
+            const auto audible = anySolo ? processor.isSoloed (slot) : ! processor.isMuted (slot);
+
+            g.setColour (theme::sampleColour (slot).withMultipliedAlpha (audible ? 1.0f : 0.35f));
             g.fillEllipse (chip.removeFromLeft (9).withSizeKeepingCentre (9, 9).toFloat());
             chip.removeFromLeft (9);
-            g.setColour (theme::text);
+            g.setColour (audible ? theme::text : theme::muted);
             g.drawText (name, chip, juce::Justification::centredLeft, true);
         }
     }

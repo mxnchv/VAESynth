@@ -95,10 +95,27 @@ int main()
         check (p.getMap()->getProjection().valid, "the map is locked after loading");
         check (renderNote (p, 40) > 1.0e-3f, "a note sounds once samples are loaded");
 
-        p.setRootNote (1, 67);
+        const auto bellSlot = p.getMap()->getSources()[1]->slot;
+        p.setRootNote (bellSlot, 67);
+        p.setMuted (bellSlot, true);
         p.getState().getParameter ("radius")->setValueNotifyingHost (0.2f);
         firstGrain = p.getMap()->getGrains().front().position;
         p.getStateInformation (saved);
+
+        // Removing a sample keeps the others where they were.
+        const auto padSource = p.getMap()->getSources()[0];
+        const auto bellFirst = std::find_if (p.getMap()->getGrains().begin(), p.getMap()->getGrains().end(),
+                                             [] (const vae::MapGrain& g) { return g.source == 1; })->position;
+        p.removeSample (padSource);
+        check (waitForLoading (p, 1), "a sample can be removed");
+        check ((p.getMap()->getGrains().front().position - bellFirst).length() < 1.0e-4f, "removing a sample does not move the others");
+        check (p.getMap()->getSources()[0]->slot == bellSlot && p.isMuted (bellSlot), "the remaining sample keeps its colour slot and settings");
+
+        p.clearSamples();
+        check (waitForLoading (p, 0) && p.getMap()->getGrains().empty(), "clear all empties the sphere");
+
+        p.addSampleFiles ({ pad });
+        check (waitForLoading (p, 1) && p.getMap()->getProjection().valid, "samples can be added again after clearing");
     }
 
     {
@@ -108,8 +125,10 @@ int main()
         p.setStateInformation (saved.getData(), (int) saved.getSize());
 
         check (waitForLoading (p, 2), "a saved session reloads its samples");
+        const auto bellSlot = p.getMap()->getSources()[1]->slot;
         check ((p.getMap()->getGrains().front().position - firstGrain).length() < 1.0e-4f, "the restored map matches the saved one");
-        check (p.getRootNote (1) == 67, "root notes are restored");
+        check (p.getRootNote (bellSlot) == 67, "root notes are restored");
+        check (p.isMuted (bellSlot), "mute state is restored");
         check (std::abs (p.getState().getParameter ("radius")->getValue() - 0.2f) < 1.0e-4f, "parameters are restored");
         check (renderNote (p, 40) > 1.0e-3f, "the restored session sounds");
 
