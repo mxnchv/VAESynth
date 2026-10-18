@@ -51,9 +51,24 @@ clap_juce_extensions_plugin(TARGET VAESynth
     CLAP_ID       "com.vaesynth.vaesynth"
     CLAP_FEATURES instrument synthesizer granular stereo)
 
+juce_add_binary_data(VAESynthAssets
+    SOURCES
+        assets/fonts/Jost-Regular.ttf
+        assets/fonts/Jost-Light.ttf)
+
+set(VAESYNTH_ENGINE_SOURCES
+    Source/engine/GrainMap.cpp
+    Source/engine/GrainEngine.cpp)
+
 target_sources(VAESynth PRIVATE
+    ${VAESYNTH_ENGINE_SOURCES}
+    Source/Parameters.cpp
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/ui/Theme.cpp
+    Source/ui/SphereView.cpp
+    Source/ui/ControlPanel.cpp
+    Source/ui/SampleBar.cpp)
 
 target_compile_definitions(VAESynth PUBLIC
     JUCE_WEB_BROWSER=0
@@ -62,8 +77,47 @@ target_compile_definitions(VAESynth PUBLIC
 
 target_link_libraries(VAESynth
     PRIVATE
+        VAESynthAssets
         juce::juce_audio_utils
+        juce::juce_dsp
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+# Headless engine tests: cmake -DVAESYNTH_BUILD_TESTS=ON, then ctest.
+option(VAESYNTH_BUILD_TESTS "Build the engine tests" OFF)
+
+if(VAESYNTH_BUILD_TESTS)
+    enable_testing()
+
+    juce_add_console_app(VAESynthTests PRODUCT_NAME "VAESynthTests")
+
+    target_sources(VAESynthTests PRIVATE
+        ${VAESYNTH_ENGINE_SOURCES}
+        tests/EngineTests.cpp)
+
+    target_compile_definitions(VAESynthTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+    target_link_libraries(VAESynthTests
+        PRIVATE
+            juce::juce_audio_formats
+            juce::juce_data_structures
+            juce::juce_dsp
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    add_test(NAME engine COMMAND VAESynthTests)
+
+    # Full processor (loading thread, state save/restore), linked against the
+    # plugin's own shared code so it exercises exactly what ships.
+    add_executable(VAESynthProcessorTests tests/ProcessorTests.cpp)
+    target_include_directories(VAESynthProcessorTests PRIVATE $<TARGET_PROPERTY:VAESynth,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(VAESynthProcessorTests PRIVATE $<TARGET_PROPERTY:VAESynth,COMPILE_DEFINITIONS>)
+    target_link_libraries(VAESynthProcessorTests PRIVATE VAESynth)
+
+    add_test(NAME processor COMMAND VAESynthProcessorTests)
+endif()
