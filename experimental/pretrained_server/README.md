@@ -8,7 +8,8 @@ Está pensado como un USB: se enchufa, se prueba y se quita sin que cambie nada 
 
 Las reglas y los ajustes acordados están en [`../README.md`](../README.md) (`experimental/README.md`). Si algo de este archivo lo contradice, manda aquel.
 
-- **Paso actual: 1 (cuaderno de escucha). No se ha tocado ningún archivo del plugin.**
+- **Paso 1 (cuaderno de escucha): hecho y aprobado.** Ver [`RESULTADOS_RONDA1.md`](RESULTADOS_RONDA1.md).
+- **Paso actual: 2 (servidor local y medición de velocidad en el M1 de Monchu).** Ver [`GUIA_MAC.md`](GUIA_MAC.md). No se ha tocado ningún archivo del plugin.
 - Los pesos del modelo, los tokens y los audios de la librería **nunca** se suben al repositorio.
 - Sin RAVE por ahora, por su licencia.
 - **Comparar con la beta DSP:** las mismas semillas se escuchan en el plugin actual cargándolas como semilla. El cuaderno no reproduce el motor DSP, que está en C++.
@@ -33,8 +34,13 @@ Uso interno: nada de esto se distribuye.
 | `vaesynth_exp/config.py` | Calcula y guarda la configuración del motor (B, s, d) con versiones |
 | `vaesynth_exp/audio.py` | Carga de sonidos, formato de los brotes y las dos medidas (brillo y distancia espectral) |
 | `vaesynth_exp/listen.py` | Hace crecer plantas, las escribe como WAV y genera la página de escucha |
+| `vaesynth_exp/nsynth.py` | Descarga NSynth y elige notas por familia (fuente de sonidos de la ronda 1) |
+| `vaesynth_exp/server.py` | Servidor del paso 2 (solo `127.0.0.1`): `/info`, `/seed`, `/render`, con caché de semillas. El protocolo está documentado al principio del archivo. `--benchmark` mide el tiempo por brote |
+| `mac/` | Instalación, medición y arranque del servidor en un Mac con Apple Silicon |
+| `GUIA_MAC.md` | Guía paso a paso para el Mac de Monchu |
+| `RESULTADOS_RONDA1.md` | Cifras y conclusiones de la ronda 1 |
 | `configs/` | Configuraciones versionadas `config_vNNN.json` |
-| `tests/` | Comprobaciones del port y del versionado (`python -m pytest tests`) |
+| `tests/` | Comprobaciones del port, del versionado, de NSynth y del protocolo del servidor (`python -m pytest tests`) |
 
 ## Cómo funciona
 

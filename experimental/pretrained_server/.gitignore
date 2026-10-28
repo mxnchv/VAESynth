@@ -4,3 +4,4 @@ __pycache__/
 # Audio and listening pages are generated; they live in OUTPUT_DIR, not here.
 *.wav
 *.flac
+.venv/
