@@ -69,7 +69,7 @@ void VAESynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     const auto numSamples = buffer.getNumSamples();
     const auto scale = currentScale();
-    const auto playable = session.getPlayableSound();
+    const auto playable = session.getPlayableSounds();
 
     // Sweeps and clicks from the editor.
     session.drainAuditions ([this] (const vae::RenderedSound::Ptr& sound, int note, float velocity, float pan)
@@ -92,7 +92,9 @@ void VAESynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
         if (message.isNoteOn())
         {
-            sampler.start (playable, scale.snap ((float) message.getNoteNumber()), message.getFloatVelocity(), 0.0f, true);
+            const auto note = scale.snap ((float) message.getNoteNumber());
+            if (playable != nullptr)
+                sampler.start (playable->forNote (note), note, message.getFloatVelocity(), 0.0f, true);
             notesPlayed.fetch_add (1);
         }
         else if (message.isNoteOff())

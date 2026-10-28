@@ -28,6 +28,15 @@ Diseño: [`docs/DESIGN.md`](docs/DESIGN.md). Encaje del futuro VAE: [`docs/VAE.m
   Los brotes le aplican filtro, envolvente, octavas, inversión, modulación en anillo,
   resonancia, aire y ensanchado.
 
+### Motor: Effects o Recipe
+- **Effects**: cada brote es tu sonido con efectos encima (filtro, envolvente, octavas, inversión…).
+- **Recipe**: el sonido se analiza y se descompone en su receta (armónicos, color, cómo se apaga
+  cada armónico, ruido). Los brotes **mutan la receta** (inarmonicidad, formantes, pares/impares,
+  brillo, ataque, aire…) y **cada nota se crea desde la receta**: suena con el mismo color y la
+  misma duración en todo el teclado, en vez de estirarse como en un sampler.
+- La planta es la misma con los dos motores: cambiar de motor solo cambia cómo suena.
+- Con Recipe, **Hear it rebuilt** toca la semilla reconstruida para compararla con el original.
+
 ### Controles
 - **Key / Scale**: escala del barrido y del teclado (las notas MIDI se ajustan a ella;
   *Off* las deja pasar todas).

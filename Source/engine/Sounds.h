@@ -3,15 +3,24 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <atomic>
 #include <memory>
 
 namespace vae
 {
     // Where a plant comes from: one of the library seeds (the built-in synth)
     // or a sound file. Immutable once loaded and shared between generations.
+    inline std::uint64_t nextSourceId() noexcept
+    {
+        static std::atomic<std::uint64_t> counter { 0 };
+        return ++counter;
+    }
+
     struct SeedSource
     {
         enum class Kind { library, sample };
+
+        std::uint64_t id = nextSourceId();  // tells sources apart in caches
 
         Kind kind = Kind::library;
         int libraryIndex = 0;

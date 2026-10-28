@@ -53,6 +53,11 @@ namespace vae
         // A sample seed with neutral traits comes back exactly as loaded.
         // May return nullptr when it cannot render: the bud then stays unlit.
         virtual RenderedSound::Ptr render (const Traits&, const SeedSource&) const = 0;
+
+        // Engines that rebuild sounds can create each note on its own instead of
+        // transposing one recording; the result plays at `note` (its rootNote).
+        virtual bool rendersEveryNote() const { return false; }
+        virtual RenderedSound::Ptr renderNote (const Traits& t, const SeedSource& s, int /*note*/) const { return render (t, s); }
     };
 
     class DspVariationEngine final : public VariationEngine

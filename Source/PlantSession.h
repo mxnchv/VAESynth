@@ -5,6 +5,7 @@
 #include <juce_events/juce_events.h>
 
 #include "engine/Plant.h"
+#include "engine/RecipeEngine.h"
 
 #include <array>
 #include <atomic>
@@ -14,8 +15,9 @@
 //
 // Threads:
 //  - message thread: every public method except the audio-thread ones;
-//  - a render thread: renders the buds of the current plant, seed first;
-//  - audio thread: getPlayableSound() and drainAuditions() only.
+//  - a render thread: renders the notes of the picked bud first (engines that
+//    rebuild every note), then the buds of the current plant, seed first;
+//  - audio thread: getPlayableSounds() and drainAuditions() only.
 //
 // Every rendered sound is also kept in `keepAlive` until nothing else
 // references it, so the audio thread never frees one.
@@ -25,6 +27,25 @@ class PlantSession final : private juce::Thread,
 public:
     explicit PlantSession (std::atomic<float>& wildParameter);
     ~PlantSession() override;
+
+    // How buds are made: effects on the seed, or rebuilt from its recipe.
+    enum class Engine { effects, recipe };
+
+    // What MIDI plays: the picked bud (or the seed), note by note when the
+    // engine rebuilds every note, otherwise one sound transposed.
+    struct PlayableSounds final : public juce::ReferenceCountedObject
+    {
+        using Ptr = juce::ReferenceCountedObjectPtr<PlayableSounds>;
+
+        vae::RenderedSound::Ptr base;
+        std::array<vae::RenderedSound::Ptr, 128> notes;
+
+        const vae::RenderedSound::Ptr& forNote (int note) const noexcept
+        {
+            const auto& own = notes[(size_t) juce::jlimit (0, 127, note)];
+            return own != nullptr ? own : base;
+        }
+    };
 
     struct Generation
     {
@@ -44,6 +65,9 @@ public:
     void goTo (int generationIndex);
     void select (int nodeIndex);  // -1: nothing picked, the seed plays
     void audition (int nodeIndex, int note, float velocity, float pan);
+    void setEngine (Engine);
+    Engine getEngine() const noexcept                   { return engineKind; }
+    void auditionRebuiltSeed();  // the seed rebuilt from its recipe, to compare
 
     bool hasPlant() const noexcept                      { return ! history.empty(); }
     const vae::Plant& getPlant() const noexcept         { return plant; }
@@ -59,11 +83,12 @@ public:
     juce::ValueTree toValueTree() const;
     void restore (const juce::ValueTree&);
 
-    // Blocks until every bud of the current plant is rendered (tests only).
+    // Blocks until every bud of the current plant, and every note of the
+    // picked bud, is rendered (tests only).
     bool waitUntilRendered (int timeoutMs);
 
     // ---- audio thread
-    vae::RenderedSound::Ptr getPlayableSound();
+    PlayableSounds::Ptr getPlayableSounds();
 
     struct Audition
     {
@@ -98,10 +123,15 @@ private:
     void pushGeneration (Generation);
     void growCurrent (bool keepSelection = false);
     void publishPlayable();
+    void scheduleNotes();
+    void pushAudition (const vae::RenderedSound::Ptr&, int note, float velocity, float pan);
+    const vae::VariationEngine& activeEngine() const;
     static std::uint32_t newRngSeed();
 
     std::atomic<float>& wild;
     vae::DspVariationEngine engine;
+    vae::RecipeVariationEngine recipeEngine;
+    Engine engineKind = Engine::effects;
     juce::AudioFormatManager formats;
 
     std::vector<Generation> history;
@@ -115,15 +145,25 @@ private:
     mutable juce::CriticalSection lock;
     std::vector<vae::RenderedSound::Ptr> sounds;     // per node of the current plant
     std::vector<vae::RenderedSound::Ptr> keepAlive;
+    std::vector<PlayableSounds::Ptr> keepAliveSets;
     int renderJob = 0;
+    const vae::VariationEngine* jobEngine = nullptr;
     vae::SeedSourcePtr jobSource;
     std::vector<vae::Traits> jobTraits;
-    std::vector<int> jobOrder;
+    std::vector<int> jobOrder;        // node indices; -1 = the rebuilt seed
+    size_t budCursor = 0;
     int playableNode = 0;
+    vae::RenderedSound::Ptr rebuiltSeed;
+
+    int noteJob = 0;
+    vae::Traits noteTraits {};
+    std::vector<int> noteOrder;
+    size_t noteCursor = 0, notesDone = 0;
+    std::array<vae::RenderedSound::Ptr, 128> noteSounds;
 
     // Shared with the audio thread.
     juce::SpinLock playableLock;
-    vae::RenderedSound::Ptr playable;
+    PlayableSounds::Ptr playable;
 
     juce::AbstractFifo auditionFifo { 64 };
     std::array<Audition, 64> auditions;

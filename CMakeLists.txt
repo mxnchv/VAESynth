@@ -60,7 +60,9 @@ set(VAESYNTH_ENGINE_SOURCES
     Source/engine/Sounds.cpp
     Source/engine/VariationEngine.cpp
     Source/engine/Plant.cpp
-    Source/engine/Sampler.cpp)
+    Source/engine/Sampler.cpp
+    Source/engine/Recipe.cpp
+    Source/engine/RecipeEngine.cpp)
 
 target_sources(VAESynth PRIVATE
     ${VAESYNTH_ENGINE_SOURCES}
