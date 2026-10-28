@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+# Audio and listening pages are generated; they live in OUTPUT_DIR, not here.
+*.wav
+*.flac
