@@ -1,119 +1,59 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-namespace
-{
-    struct TestToneSound final : juce::SynthesiserSound
-    {
-        bool appliesToNote (int) override    { return true; }
-        bool appliesToChannel (int) override { return true; }
-    };
-
-    class TestToneVoice final : public juce::SynthesiserVoice
-    {
-    public:
-        bool canPlaySound (juce::SynthesiserSound* s) override
-        {
-            return dynamic_cast<TestToneSound*> (s) != nullptr;
-        }
-
-        void startNote (int midiNote, float velocity, juce::SynthesiserSound*, int) override
-        {
-            phase = 0.0;
-            phaseDelta = juce::MathConstants<double>::twoPi
-                         * juce::MidiMessage::getMidiNoteInHertz (midiNote) / getSampleRate();
-            level = 0.2f * velocity;
-            adsr.setSampleRate (getSampleRate());
-            adsr.setParameters ({ 0.01f, 0.1f, 0.8f, 0.3f });
-            adsr.noteOn();
-        }
-
-        void stopNote (float, bool allowTailOff) override
-        {
-            if (allowTailOff)
-            {
-                adsr.noteOff();
-            }
-            else
-            {
-                adsr.reset();
-                clearCurrentNote();
-            }
-        }
-
-        void pitchWheelMoved (int) override {}
-        void controllerMoved (int, int) override {}
-
-        void renderNextBlock (juce::AudioBuffer<float>& out, int start, int numSamples) override
-        {
-            if (! isVoiceActive())
-                return;
-
-            for (int i = start; i < start + numSamples; ++i)
-            {
-                const auto sample = (float) std::sin (phase) * level * adsr.getNextSample();
-                phase += phaseDelta;
-
-                for (int ch = 0; ch < out.getNumChannels(); ++ch)
-                    out.addSample (ch, i, sample);
-
-                if (! adsr.isActive())
-                {
-                    clearCurrentNote();
-                    break;
-                }
-            }
-        }
-
-    private:
-        double phase = 0.0, phaseDelta = 0.0;
-        float level = 0.0f;
-        juce::ADSR adsr;
-    };
-}
-
 VAESynthProcessor::VAESynthProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      state (*this, nullptr, "VAESynth", createParameterLayout())
+      state (*this, nullptr, "VAESynth", createParameterLayout()),
+      session (*state.getRawParameterValue (ParamIDs::wild.getParamID()))
 {
-    gainParam = state.getRawParameterValue (ParamIDs::gain.getParamID());
+    spaceParam = state.getRawParameterValue (ParamIDs::space.getParamID());
+    volumeParam = state.getRawParameterValue (ParamIDs::volume.getParamID());
+    rootParam = state.getRawParameterValue (ParamIDs::scaleRoot.getParamID());
+    scaleParam = state.getRawParameterValue (ParamIDs::scaleType.getParamID());
 
-    for (int i = 0; i < 8; ++i)
-        testSynth.addVoice (new TestToneVoice());
-
-    testSynth.addSound (new TestToneSound());
+    // Sounds good the moment it opens: start from the first library seed.
+    session.chooseLibrarySeed (0);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout VAESynthProcessor::createParameterLayout()
 {
     using Range = juce::NormalisableRange<float>;
+    auto percent = juce::AudioParameterFloatAttributes().withStringFromValueFunction (
+        [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; });
 
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
+    layout.add (std::make_unique<juce::AudioParameterFloat> (ParamIDs::wild, "Wild", Range { 0.0f, 1.0f }, 0.5f, percent));
+    layout.add (std::make_unique<juce::AudioParameterFloat> (ParamIDs::space, "Space", Range { 0.0f, 1.0f }, 0.35f, percent));
     layout.add (std::make_unique<juce::AudioParameterFloat> (
-        ParamIDs::azimuth, "Azimuth", Range { -180.0f, 180.0f }, 0.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("deg")));
-
-    layout.add (std::make_unique<juce::AudioParameterFloat> (
-        ParamIDs::elevation, "Elevation", Range { -90.0f, 90.0f }, 0.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("deg")));
-
-    layout.add (std::make_unique<juce::AudioParameterFloat> (
-        ParamIDs::radius, "Radius", Range { -1.5f, 1.5f }, 1.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("R")));
-
-    layout.add (std::make_unique<juce::AudioParameterFloat> (
-        ParamIDs::gain, "Gain", Range { -24.0f, 6.0f }, 0.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("dB")));
-
+        ParamIDs::volume, "Volume", Range { -30.0f, 6.0f }, 0.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction (
+            [] (float v, int) { return (v > 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; })));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (ParamIDs::scaleRoot, "Key", vae::Scale::rootNames(), 9));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (ParamIDs::scaleType, "Scale", vae::Scale::typeNames(),
+                                                              vae::Scale::typeNames().indexOf ("Pentatonic minor")));
     return layout;
 }
 
-void VAESynthProcessor::prepareToPlay (double sampleRate, int)
+vae::Scale VAESynthProcessor::currentScale() const noexcept
 {
-    testSynth.setCurrentPlaybackSampleRate (sampleRate);
+    return vae::Scale::fromIndices ((int) rootParam->load(), (int) scaleParam->load());
+}
+
+void VAESynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    sampler.prepare (sampleRate);
+
+    reverb.setSampleRate (sampleRate);
+    reverb.reset();
+
+    limiter.prepare ({ sampleRate, (juce::uint32) juce::jmax (1, samplesPerBlock), 2 });
+    limiter.setThreshold (-1.0f);
+    limiter.setRelease (120.0f);
+    limiter.reset();
+
     outputGain.reset (sampleRate, 0.02);
-    outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (gainParam->load()));
+    outputGain.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (volumeParam->load()));
 }
 
 bool VAESynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -125,12 +65,78 @@ bool VAESynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 void VAESynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
-
     buffer.clear();
-    testSynth.renderNextBlock (buffer, midi, 0, buffer.getNumSamples());
 
-    outputGain.setTargetValue (juce::Decibels::decibelsToGain (gainParam->load()));
-    outputGain.applyGain (buffer, buffer.getNumSamples());
+    const auto numSamples = buffer.getNumSamples();
+    const auto scale = currentScale();
+    const auto playable = session.getPlayableSound();
+
+    // Sweeps and clicks from the editor.
+    session.drainAuditions ([this] (const vae::RenderedSound::Ptr& sound, int note, float velocity, float pan)
+    {
+        sampler.start (sound, note, velocity, pan, false);
+    });
+
+    // MIDI, sample-accurate. Notes are kept in key, like the sweeps.
+    int position = 0;
+    for (const auto metadata : midi)
+    {
+        const auto message = metadata.getMessage();
+        const auto at = juce::jlimit (0, numSamples, metadata.samplePosition);
+
+        if (at > position)
+        {
+            sampler.render (buffer, position, at - position);
+            position = at;
+        }
+
+        if (message.isNoteOn())
+        {
+            sampler.start (playable, scale.snap ((float) message.getNoteNumber()), message.getFloatVelocity(), 0.0f, true);
+            notesPlayed.fetch_add (1);
+        }
+        else if (message.isNoteOff())
+        {
+            sampler.noteOff (scale.snap ((float) message.getNoteNumber()));
+        }
+        else if (message.isSustainPedalOn())
+        {
+            sampler.setSustain (true);
+        }
+        else if (message.isSustainPedalOff())
+        {
+            sampler.setSustain (false);
+        }
+        else if (message.isAllNotesOff() || message.isAllSoundOff())
+        {
+            sampler.allNotesOff();
+        }
+    }
+
+    if (position < numSamples)
+        sampler.render (buffer, position, numSamples - position);
+
+    // Space: a soft hall.
+    const auto space = spaceParam->load();
+    juce::Reverb::Parameters parameters;
+    parameters.roomSize = 0.86f;
+    parameters.damping = 0.45f;
+    parameters.wetLevel = space * 0.5f;
+    parameters.dryLevel = 1.0f - space * 0.3f;
+    parameters.width = 1.0f;
+    reverb.setParameters (parameters);
+
+    if (buffer.getNumChannels() > 1)
+        reverb.processStereo (buffer.getWritePointer (0), buffer.getWritePointer (1), numSamples);
+    else
+        reverb.processMono (buffer.getWritePointer (0), numSamples);
+
+    outputGain.setTargetValue (juce::Decibels::decibelsToGain (volumeParam->load()));
+    outputGain.applyGain (buffer, numSamples);
+
+    // Never louder than full scale.
+    juce::dsp::AudioBlock<float> block (buffer);
+    limiter.process (juce::dsp::ProcessContextReplacing<float> (block));
 }
 
 juce::AudioProcessorEditor* VAESynthProcessor::createEditor()
@@ -140,15 +146,27 @@ juce::AudioProcessorEditor* VAESynthProcessor::createEditor()
 
 void VAESynthProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    if (auto xml = state.copyState().createXml())
+    auto tree = state.copyState();
+    tree.removeChild (tree.getChildWithName ("Plant"), nullptr);
+    tree.appendChild (session.toValueTree(), nullptr);
+
+    if (auto xml = tree.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
 void VAESynthProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    if (auto xml = getXmlFromBinary (data, sizeInBytes))
-        if (xml->hasTagName (state.state.getType()))
-            state.replaceState (juce::ValueTree::fromXml (*xml));
+    auto xml = getXmlFromBinary (data, sizeInBytes);
+    if (xml == nullptr || ! xml->hasTagName (state.state.getType()))
+        return;
+
+    auto tree = juce::ValueTree::fromXml (*xml);
+    const auto plant = tree.getChildWithName ("Plant");
+    tree.removeChild (plant, nullptr);
+    state.replaceState (tree);
+
+    if (plant.isValid())
+        session.restore (plant);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

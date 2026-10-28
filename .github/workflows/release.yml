@@ -1,0 +1,82 @@
+name: Release
+
+# Pushing a tag such as beta-0.3 builds both platforms and publishes the
+# installers on the repository's Releases page, where they do not expire.
+on:
+  push:
+    tags: ['beta-*', 'v*']
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            configure_args: -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          - name: Windows
+            os: windows-latest
+            configure_args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DVAESYNTH_BUILD_TESTS=ON ${{ matrix.configure_args }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        working-directory: build/VAESynth_artefacts/Release
+        run: |
+          for bundle in VST3/VAESynth.vst3 AU/VAESynth.component CLAP/VAESynth.clap Standalone/VAESynth.app; do
+            codesign --force --deep --sign - "$bundle"
+          done
+          mkdir VAESynth-macOS
+          cp -R VST3 AU CLAP Standalone VAESynth-macOS/
+          cp "$GITHUB_WORKSPACE/packaging/macos/install.sh" VAESynth-macOS/
+          ditto -c -k --keepParent VAESynth-macOS VAESynth-macOS.zip
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        working-directory: build/VAESynth_artefacts/Release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory VAESynth-Windows | Out-Null
+          Copy-Item VST3, CLAP, Standalone -Destination VAESynth-Windows -Recurse
+          Compress-Archive -Path VAESynth-Windows -DestinationPath VAESynth-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VAESynth-${{ matrix.name }}-zip
+          path: build/VAESynth_artefacts/Release/VAESynth-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "VAESynth $GITHUB_REF_NAME" \
+            --notes "Instaladores de VAESynth $GITHUB_REF_NAME. Mac: descomprime VAESynth-macOS.zip y ejecuta bash VAESynth-macOS/install.sh. Windows: copia VAESynth.vst3 a C:\\Program Files\\Common Files\\VST3\\." \
+            --prerelease
