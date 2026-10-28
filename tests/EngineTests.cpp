@@ -179,6 +179,18 @@ int main()
         }
         check (seedStats.peak > 0.3f, "the test sample is audible");
 
+        // A stereo seed keeps its stereo image in every bud.
+        {
+            auto t = vae::sampleNeutral;
+            t[vae::trait::bright] = 0.2f;
+            t[vae::trait::metal] = 0.5f;
+            const auto bud = engine.render (t, *e3);
+            const auto left = bud->audio.getRMSLevel (0, 0, bud->audio.getNumSamples());
+            const auto right = bud->audio.getNumChannels() > 1 ? bud->audio.getRMSLevel (1, 0, bud->audio.getNumSamples()) : left;
+            check (bud->audio.getNumChannels() == 2 && std::abs (right / left - 0.8f) < 0.02f,
+                   "buds of a stereo sound stay stereo with the same balance");
+        }
+
         const auto shorter = [&]
         {
             auto t = vae::sampleNeutral;

@@ -218,15 +218,8 @@ namespace vae
                 return sound;
             }
 
-            std::vector<float> source ((size_t) seed.audio.getNumSamples(), 0.0f);
-            for (int ch = 0; ch < seed.audio.getNumChannels(); ++ch)
-                for (size_t i = 0; i < source.size(); ++i)
-                    source[i] += seed.audio.getSample (ch, (int) i) / (float) seed.audio.getNumChannels();
-
-            if (isReversed (t))
-                std::reverse (source.begin(), source.end());
-
-            const auto sourceSeconds = (float) ((double) source.size() / sr);
+            const auto sourceLength = seed.audio.getNumSamples();
+            const auto sourceSeconds = (float) ((double) sourceLength / sr);
             const auto attackTime = t[attack] * t[attack] * 0.5f;
             const auto cut = t[decay] < 0.97f;
             const auto hold = cut ? 0.06f + std::pow (t[decay], 1.6f) * sourceSeconds : sourceSeconds;
@@ -243,55 +236,82 @@ namespace vae
 
             const auto ring = t[metal] > 0.06f;
             const auto ringFrequency = f0 * (1.5f + t[ratio] * 3.17f);
-
-            std::vector<float> signal (length, 0.0f);
-            for (size_t i = 0; i < length; ++i)
-            {
-                float sum = 0.0f;
-                for (const auto& copy : copies)
-                    sum += readAt (source, (double) i * copy.rate) * copy.gain;
-
-                if (ring)
-                {
-                    const auto modulator = std::sin (twoPi * ringFrequency * (float) ((double) i / sr));
-                    sum = sum * (1.0f - t[metal] * 0.6f) + sum * modulator * t[metal] * 1.4f;
-                }
-
-                signal[i] = sum;
-            }
-
-            Rng rng (noiseSeed);
-            addNoise (signal, t, f0, sr, juce::jmax (0.004f, attackTime), juce::jmin (hold, 0.5f), rng);
-
-            // Darker buds close a low-pass; brighter ones lift the top and thin the bottom.
             const auto tone = t[bright] - 0.5f;
-            if (tone < -0.04f)
-                applyFilter (signal, Coefficients::makeLowPass (sr, safeFrequency (18000.0f * std::pow (2.0f, tone * 14.0f), sr), 0.7f));
-            else if (tone > 0.04f)
-                applyFilter (signal, Coefficients::makeHighShelf (sr, safeFrequency (2500.0f, sr), 0.7f, juce::Decibels::decibelsToGain (tone * 26.0f)));
-            if (tone > 0.15f)
-                applyFilter (signal, Coefficients::makeHighPass (sr, safeFrequency (40.0f * std::pow (2.0f, tone * 11.0f), sr), 0.7f));
-
-            if (t[body] > 0.05f)
-                applyFilter (signal, Coefficients::makePeakFilter (sr, safeFrequency (juce::jmin (9000.0f, f0 * (2.0f + t[ratio] * 3.0f)), sr),
-                                                                   6.0f, juce::Decibels::decibelsToGain (t[body] * 18.0f)));
-
             const auto fadeStart = attackTime + hold * 0.25f;
             const auto end = (float) endTime;
-            for (size_t i = 0; i < length; ++i)
+
+            // Each channel goes through the same chain, so a stereo sound stays stereo.
+            std::vector<std::vector<float>> channels;
+            for (int ch = 0; ch < seed.audio.getNumChannels(); ++ch)
             {
-                const auto time = (float) ((double) i / sr);
-                auto gain = 1.0f;
-                if (attackTime > 0.003f && time < attackTime)
-                    gain = time / attackTime;
-                if (cut && time > fadeStart)
-                    gain *= expRamp (1.0f, 0.0001f, time - fadeStart, juce::jmax (0.01f, end - fadeStart));
-                signal[i] *= gain;
+                std::vector<float> source (seed.audio.getReadPointer (ch), seed.audio.getReadPointer (ch) + sourceLength);
+                if (isReversed (t))
+                    std::reverse (source.begin(), source.end());
+
+                std::vector<float> signal (length, 0.0f);
+                for (size_t i = 0; i < length; ++i)
+                {
+                    float sum = 0.0f;
+                    for (const auto& copy : copies)
+                        sum += readAt (source, (double) i * copy.rate) * copy.gain;
+
+                    if (ring)
+                    {
+                        const auto modulator = std::sin (twoPi * ringFrequency * (float) ((double) i / sr));
+                        sum = sum * (1.0f - t[metal] * 0.6f) + sum * modulator * t[metal] * 1.4f;
+                    }
+
+                    signal[i] = sum;
+                }
+
+                // Breath differs per side, so it opens up rather than sitting in the middle.
+                Rng rng (noiseSeed + (std::uint32_t) ch * 7919u);
+                addNoise (signal, t, f0, sr, juce::jmax (0.004f, attackTime), juce::jmin (hold, 0.5f), rng);
+
+                // Darker buds close a low-pass; brighter ones lift the top and thin the bottom.
+                if (tone < -0.04f)
+                    applyFilter (signal, Coefficients::makeLowPass (sr, safeFrequency (18000.0f * std::pow (2.0f, tone * 14.0f), sr), 0.7f));
+                else if (tone > 0.04f)
+                    applyFilter (signal, Coefficients::makeHighShelf (sr, safeFrequency (2500.0f, sr), 0.7f, juce::Decibels::decibelsToGain (tone * 26.0f)));
+                if (tone > 0.15f)
+                    applyFilter (signal, Coefficients::makeHighPass (sr, safeFrequency (40.0f * std::pow (2.0f, tone * 11.0f), sr), 0.7f));
+
+                if (t[body] > 0.05f)
+                    applyFilter (signal, Coefficients::makePeakFilter (sr, safeFrequency (juce::jmin (9000.0f, f0 * (2.0f + t[ratio] * 3.0f)), sr),
+                                                                       6.0f, juce::Decibels::decibelsToGain (t[body] * 18.0f)));
+
+                for (size_t i = 0; i < length; ++i)
+                {
+                    const auto time = (float) ((double) i / sr);
+                    auto gain = 1.0f;
+                    if (attackTime > 0.003f && time < attackTime)
+                        gain = time / attackTime;
+                    if (cut && time > fadeStart)
+                        gain *= expRamp (1.0f, 0.0001f, time - fadeStart, juce::jmax (0.01f, end - fadeStart));
+                    signal[i] *= gain;
+                }
+
+                channels.push_back (std::move (signal));
             }
 
-            // Never louder than full scale; quieter buds stay quieter.
-            normalisePeak (signal, 0.95f, true);
-            return makeSound (std::move (signal), sr, seed.rootNote);
+            // Never louder than full scale; quieter buds stay quieter. Both sides
+            // are scaled together so the stereo balance is kept.
+            float peak = 0.0f;
+            for (const auto& c : channels)
+                for (auto v : c)
+                    peak = juce::jmax (peak, std::abs (v));
+
+            RenderedSound::Ptr sound (new RenderedSound());
+            sound->sampleRate = sr;
+            sound->rootNote = seed.rootNote;
+            sound->audio.setSize ((int) channels.size(), (int) length);
+            for (size_t ch = 0; ch < channels.size(); ++ch)
+            {
+                if (peak > 0.95f)
+                    for (auto& v : channels[ch]) v *= 0.95f / peak;
+                sound->audio.copyFrom ((int) ch, 0, channels[ch].data(), (int) length);
+            }
+            return sound;
         }
 
         std::uint32_t hashTraits (const Traits& t) noexcept
