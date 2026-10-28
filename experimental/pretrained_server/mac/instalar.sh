@@ -27,8 +27,12 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 # 2. Entorno de Python propio del experimento, con PyTorch (con soporte MPS) y diffusers.
-echo "== Creando el entorno .venv (Python 3.12)"
-uv venv --python 3.12 .venv
+if [[ -x .venv/bin/python ]]; then
+    echo "== El entorno .venv ya existe: se actualizan sus librerías"
+else
+    echo "== Creando el entorno .venv (Python 3.12)"
+    uv venv --python 3.12 .venv
+fi
 echo "== Instalando librerías (PyTorch, diffusers…). Puede tardar unos minutos."
 uv pip install --python .venv/bin/python -r requirements.txt
 

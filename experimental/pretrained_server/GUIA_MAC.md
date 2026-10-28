@@ -74,12 +74,34 @@ El servidor necesita `configs/config_v001.json`, el archivo con las direcciones 
 bash experimental/pretrained_server/mac/medir_velocidad.sh
 ```
 
-Codifica un sonido de prueba de 4 s y renderiza 12 brotes, primero con la GPU del Mac y luego con la CPU. Imprime:
+Codifica un sonido de prueba de 4 s y renderiza varios brotes, primero con la GPU del Mac y luego con la CPU, con brotes de hasta 4,5 s, 3 s y 2 s. Imprime una línea por caso:
 
 - `ms_per_bud_median`: milisegundos por brote.
 - `plant_of_65_buds_s` y `plant_of_120_buds_s`: segundos para encender una planta media y una grande.
 
-**Mandad estos resultados a Fer.** Como referencia, en la CPU de un servidor en la nube salió unos 5,3 s por brote (casi 6 minutos por planta). La GPU del M1 debería ir bastante más rápida, pero hay que medirlo. Con esas cifras se decide cómo hacer el paso 3: cuántos brotes calcular a la vez, si acortar los brotes, etc.
+**Mandad estos resultados a Fer.**
+
+### 3.6 Mediciones hechas
+
+**Primera medición (29 oct, antes de las mejoras), brotes de 4 s:**
+
+| | Codificar la semilla | Por brote | Planta de 65 | Planta de 120 |
+|---|---|---|---|---|
+| GPU (MPS) | 4,0 s | 3,1 s | 200 s | 370 s |
+| CPU | 1,9 s | 1,8 s | 117 s | 216 s |
+
+La CPU fue unas 1,7 veces más rápida que la GPU. La causa probable: el *weight norm* de las convoluciones, que cae a la CPU en cada capa con `PYTORCH_ENABLE_MPS_FALLBACK`.
+
+**Mejoras aplicadas** (ninguna cambia el sonido de los brotes):
+
+1. **El *weight norm* se fusiona una vez al cargar el modelo.** Comprobado: produce exactamente el mismo audio. Puede hacer que la GPU deje de caer a la CPU.
+2. **El servidor usa la CPU por defecto.** `--device mps` para probar la GPU.
+3. **Se recorta el final silencioso de la semilla** (60 dB por debajo de su pico) y solo se codifica lo que se va a usar.
+4. **Nueva opción `--max-seconds`**: la duración máxima de un brote. El tiempo de cálculo es proporcional a la duración, así que es la palanca más grande. Es una decisión de producto (brotes más cortos), por eso por defecto sigue en 4,5 s.
+
+**Segunda medición (pendiente):** `git pull`, volver a ejecutar `mac/instalar.sh` (añade `accelerate`; no rehace lo que ya está) y después `mac/medir_velocidad.sh`. Mandad la salida a Fer.
+
+### 3.7 Arrancar el servidor (para el paso 3)
 
 ### 3.6 Arrancar el servidor (para el paso 3)
 
@@ -95,7 +117,7 @@ Se queda escuchando en `http://127.0.0.1:8765` hasta pulsar Ctrl+C. Por ahora no
 |---|---|
 | `Falta Homebrew` | Instalar Homebrew desde https://brew.sh |
 | Error 401/403 al descargar el modelo | Condiciones no aceptadas en Hugging Face, o el token es de otra cuenta |
-| `MPS: NO` o la medición con MPS falla | Se puede usar la CPU (`--device cpu`), mucho más lenta. Copiar el error para Fer |
+| `MPS: NO` o la medición con MPS falla | No pasa nada: el servidor usa la CPU por defecto. Copiar el error para Fer |
 | `Falta configs/config_v001.json` | Esperar a que Fer lo suba y hacer `git pull` |
 | `Address already in use` al arrancar | Ya hay un servidor abierto: cerrarlo, o usar `--port 8766` |
 

@@ -29,6 +29,24 @@ def pick_device() -> str:
     return "cpu"
 
 
+def fuse_weight_norm(module: torch.nn.Module) -> int:
+    """Bakes weight norm into plain weights, once. Same output, less work per call.
+
+    The autoencoder's convolutions use weight norm, which recomputes every weight
+    on each forward pass; on Apple's GPU (MPS) that step may fall back to the CPU
+    at every layer. Returns how many layers were fused.
+    """
+    fused = 0
+    for layer in module.modules():
+        if hasattr(layer, "weight_g") and hasattr(layer, "weight_v"):
+            torch.nn.utils.remove_weight_norm(layer)
+            fused += 1
+        elif "weight" in getattr(getattr(layer, "parametrizations", {}), "keys", lambda: [])():
+            torch.nn.utils.parametrize.remove_parametrizations(layer, "weight", leave_parametrized=True)
+            fused += 1
+    return fused
+
+
 class LatentModel:
     """encode(audio) -> latent (64, T) and decode(latent) -> audio (2, N)."""
 
@@ -44,6 +62,7 @@ class LatentModel:
         else:
             self.vae = AutoencoderOobleck.from_pretrained(MODEL_ID, subfolder="vae", token=token)
             self.name = f"{MODEL_ID}/vae"
+        self.fused = fuse_weight_norm(self.vae)
         self.vae = self.vae.to(self.device).eval()
 
     @torch.no_grad()

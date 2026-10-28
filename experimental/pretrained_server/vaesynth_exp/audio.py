@@ -42,14 +42,30 @@ def to_model_input(audio: np.ndarray, rate: int) -> np.ndarray:
     return x[:2]
 
 
-def finish_bud(stereo: np.ndarray, seed_channels: int, seed_samples: int) -> np.ndarray:
+def trim_tail(audio: np.ndarray, rate: int, threshold_db: float = -60.0, pad_seconds: float = 0.05) -> np.ndarray:
+    """Drops the silent end of a one-shot (below `threshold_db` from its peak).
+
+    A shorter seed means shorter buds, and decoding time grows with length.
+    Nothing audible is lost: only what is 60 dB under the peak.
+    """
+    level = np.abs(audio).max(axis=0)
+    peak = float(level.max()) if level.size else 0.0
+    if peak <= 0.0:
+        return audio
+    loud = np.nonzero(level >= peak * 10 ** (threshold_db / 20))[0]
+    end = min(audio.shape[1], int(loud[-1]) + 1 + int(pad_seconds * rate))
+    return audio[:, :end]
+
+
+def finish_bud(stereo: np.ndarray, seed_channels: int, seed_samples: int,
+               max_seconds: float = MAX_BUD_SECONDS) -> np.ndarray:
     """Model output -> what the plugin would play.
 
     Same channel count as the seed (the plugin keeps stereo seeds stereo),
-    no longer than the seed nor than 4.5 s, a short fade at the end, and
-    never louder than 0.95 (quieter buds stay quieter, both sides together).
+    no longer than the seed nor than `max_seconds`, a short fade at the end,
+    and never louder than 0.95 (quieter buds stay quieter, both sides together).
     """
-    length = min(stereo.shape[1], seed_samples, int(MAX_BUD_SECONDS * SAMPLE_RATE))
+    length = min(stereo.shape[1], seed_samples, int(max_seconds * SAMPLE_RATE))
     out = stereo[:, :length].copy()
     if seed_channels == 1:
         out = out.mean(axis=0, keepdims=True)

@@ -97,6 +97,23 @@ def test_seed_node_returns_the_seed(server):
     assert status == 200 and np.allclose(np.frombuffer(audio, "<f4"), mono)
 
 
+def test_max_seconds_and_silent_tail():
+    rng = np.random.default_rng(1)
+    means = rng.standard_normal((30, 64))
+    config = cfg.build(means, 1000 * 2 ** means[:, 0])
+    config.update(version=1, basis=np.asarray(config["basis"], np.float32),
+                  scale=np.asarray(config["scale"], np.float32), direction=np.asarray(config["direction"], np.float32))
+    engine = Engine(FakeModel(), config, max_seconds=0.5)
+    tone = (0.5 * np.sin(2 * np.pi * 440 * np.arange(2 * SAMPLE_RATE) / SAMPLE_RATE)).astype(np.float32)
+    engine.add_seed("long", tone, SAMPLE_RATE, 1)
+    assert engine.render("long", CENTRE + 0.1).shape[1] <= int(0.5 * SAMPLE_RATE)
+
+    engine.set_max_seconds(4.5)
+    padded = np.r_[tone[: SAMPLE_RATE // 2], np.zeros(3 * SAMPLE_RATE, np.float32)]  # 0.5 s of sound, 3 s of silence
+    engine.add_seed("tail", padded, SAMPLE_RATE, 1)
+    assert engine.render("tail", CENTRE + 0.1).shape[1] <= int(0.6 * SAMPLE_RATE)  # the silence is not rendered
+
+
 def test_errors(server):
     assert call(f"{server}/render?key=nope&coords={coords_query(CENTRE)}", b"")[0] == 404
     assert call(f"{server}/render?key=nope&coords=1,2,3", b"")[0] == 400

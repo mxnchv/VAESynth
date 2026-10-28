@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Arranca el servidor experimental en 127.0.0.1:8765. Déjalo abierto mientras pruebas el plugin.
 # Uso:   bash experimental/pretrained_server/mac/arrancar_servidor.sh   (Ctrl+C para parar)
-# Opciones: --port 8765  --config configs/config_v001.json  --device mps|cpu
+# Opciones: --port 8765  --config configs/config_v001.json  --device cpu|mps (por defecto cpu)
+#           --max-seconds 4.5 (duración máxima de un brote; más corto = más rápido)  --threads N
 set -euo pipefail
 # Operaciones que la GPU del Mac aún no tenga: que caigan a la CPU en vez de fallar.
 export PYTORCH_ENABLE_MPS_FALLBACK=1
