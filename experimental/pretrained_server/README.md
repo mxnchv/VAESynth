@@ -67,11 +67,25 @@ hijo = clip(padre + N(0,1)·amount·sigma + leash·(0.5 − padre) + lean·amoun
 
 **Brotes.** Tienen los mismos canales que la semilla (estéreo si la semilla es estéreo), duran como mucho lo que la semilla y 4,5 s, y nunca superan un pico de 0,95.
 
+## Fuente de sonidos: NSynth
+
+Por decisión del equipo, el experimento usa **NSynth** (Magenta, licencia CC BY 4.0) y no la librería propia. El cuaderno lo descarga solo (`FUENTE = "nsynth"`, por defecto).
+
+- Se usa la parte `test`: 4.096 notas, la descarga más pequeña. La parte `train` ocupa decenas de GB y no hace falta.
+- **Configuración (B, s, d):** `N_CONFIG_SOUNDS` notas repartidas por igual entre familias de instrumento, entre MIDI 36 y 84.
+- **Semillas:** por defecto, una nota por familia cerca de MIDI 60 (velocidad 100 si existe). Se pueden elegir con `SEEDS`, por nombre (por ejemplo `"guitar_acoustic_010-060-100"`).
+- **Limitación importante:** NSynth está a 16 kHz, así que **no hay nada por encima de 8 kHz**. Las notas se convierten a 44,1 kHz para el VAE, pero seguirán sonando más apagadas que las semillas de la beta. Por eso:
+  - La dirección "brillante" (`d`) se aprende solo con el contenido por debajo de 8 kHz.
+  - La comparación con la beta no es justa en brillo; sí en movimiento, variedad y parecido con la semilla.
+- Todas las notas duran 4 s, son tonales y son de instrumentos (no hay voces ni objetos). El latente se organiza por timbres de instrumento.
+- La URL de descarga directa no está comprobada desde esta sesión. Si falla, descarga `nsynth-test.jsonwav.tar.gz` desde https://magenta.tensorflow.org/datasets/nsynth y pon su ruta en `NSYNTH_ARCHIVE`.
+- Para volver a sonidos propios: `FUENTE = "carpeta"` y `SOUNDS_DIR`.
+
 ## Cómo usarlo
 
-1. Copiar esta carpeta a Google Drive (o clonar la rama) y subir una selección de la librería a una carpeta. Para empezar, unos cientos de sonidos.
-2. Abrir el cuaderno en Colab con GPU (o en local) y ajustar `PACKAGE_DIR`, `SOUNDS_DIR` y `OUTPUT_DIR`.
-3. Ejecutarlo. Calcula una configuración nueva y hace crecer las plantas de `N_SEEDS` semillas con Wild 0, 0,5 y 1.
+1. Tener esta carpeta en Google Drive (clonando la rama) o en local.
+2. Abrir el cuaderno en Colab con GPU (o en local). Si la carpeta está en `MyDrive/VAESynth/...`, las rutas ya están bien.
+3. Ejecutarlo. Descarga NSynth, calcula una configuración nueva y hace crecer las plantas de las semillas con Wild 0, 0,5 y 1.
 4. Abrir `OUTPUT_DIR/config_vNNN/index.html`. Cada planta tiene su página: la semilla, la reconstrucción D(E(x)) y los brotes por nivel, ordenados de izquierda (oscuro) a derecha (brillante).
 
 Para comprobar que todo corre sin pesos reales: `VAESYNTH_SMOKE=1 python notebooks/01_escucha_plantas.py`. Usa pesos aleatorios y sonidos sintéticos, así que suena a ruido.

@@ -47,19 +47,30 @@ sys.path.insert(0, str(PACKAGE_DIR))
 # %% [markdown]
 # ## 2. Parámetros
 #
-# - `SOUNDS_DIR`: carpeta con sonidos de la librería (se busca en subcarpetas).
+# - `FUENTE`: `"nsynth"` (por defecto) descarga NSynth y lo usa para todo; `"carpeta"` usa los sonidos de `SOUNDS_DIR`.
+#   NSynth está a 16 kHz: nada por encima de 8 kHz. Sonará más apagado que la beta y la dirección "brillante" se
+#   aprende solo con lo que hay por debajo de 8 kHz. Licencia CC BY 4.0 (atribución si algo derivado se distribuye).
+# - `NSYNTH_SPLIT`: `"test"` (4.096 notas, la descarga más pequeña) basta. No uses `"train"` (decenas de GB).
 # - `N_CONFIG_SOUNDS`: cuántos sonidos se usan para calcular las direcciones del latente (B, s, d). 200–500 está bien.
-# - `SEEDS`: nombres de archivo concretos para usar como semilla, o `None` para elegir `N_SEEDS` al azar.
+#   Con NSynth se reparten por igual entre familias de instrumento, entre MIDI 36 y 84.
+# - `SEEDS`: nombres concretos para usar como semilla (en NSynth, p. ej. `"guitar_acoustic_010-060-100"`), o `None`:
+#   con NSynth, `SEEDS_PER_FAMILY` notas por familia cerca de `SEED_PITCH`; con carpeta, `N_SEEDS` al azar.
 # - `NEW_CONFIG`: `True` calcula una configuración nueva y la guarda como versión nueva; `False` usa la última guardada
 #   (o la de `CONFIG_PATH`). Nunca se sobrescribe una configuración existente.
 # - `SMOKE_TEST`: solo para comprobar que todo corre. Usa pesos aleatorios y sonidos sintéticos: suena a ruido.
 
 # %%
+FUENTE = "nsynth"      # "nsynth" o "carpeta"
+NSYNTH_SPLIT = "test"
+NSYNTH_DIR = Path("/content/nsynth" if IN_COLAB else "~/VAESynth/nsynth").expanduser()  # en Colab, disco local: más rápido que Drive
+NSYNTH_ARCHIVE = None   # ruta a un .tar.gz ya descargado, si la descarga automática falla
 SOUNDS_DIR = Path("/content/drive/MyDrive/VAESynth/libreria" if IN_COLAB else "~/VAESynth/libreria").expanduser()
 OUTPUT_DIR = Path("/content/drive/MyDrive/VAESynth/escucha" if IN_COLAB else "~/VAESynth/escucha").expanduser()
 
-N_CONFIG_SOUNDS = 300
-SEEDS = None            # p. ej. ["cristal_A4.wav", "cuerda_pizz.wav"]
+N_CONFIG_SOUNDS = 400
+SEEDS = None            # p. ej. ["guitar_acoustic_010-060-100", "mallet_acoustic_047-072-100"]
+SEEDS_PER_FAMILY = 1
+SEED_PITCH = 60
 N_SEEDS = 12
 WILDS = [0.0, 0.5, 1.0]
 RNG_SEEDS = [1]         # varias = varias plantas (Regrow) por semilla y Wild
@@ -90,6 +101,7 @@ import numpy as np
 from vaesynth_exp import audio as au
 from vaesynth_exp import config as cfg
 from vaesynth_exp import listen
+from vaesynth_exp import nsynth
 from vaesynth_exp.latent import LatentModel
 from vaesynth_exp.plant import MutationSettings
 
@@ -111,7 +123,7 @@ if SMOKE_TEST:
         tone += 0.05 * rng.standard_normal(len(t)) * env
         data = tone[:, None] if k % 2 == 0 else np.c_[tone, np.roll(tone, 30) * 0.8]
         sf.write(SOUNDS_DIR / f"sintetico_{k:02d}.wav", (0.5 * data / np.abs(data).max()).astype(np.float32), sr)
-    N_CONFIG_SOUNDS, N_SEEDS, WILDS = 12, 2, [0.0, 1.0]
+    N_CONFIG_SOUNDS, N_SEEDS, WILDS, FUENTE = 12, 2, [0.0, 1.0], "carpeta"
 
 model = LatentModel(random_weights=SMOKE_TEST, token=HF_TOKEN)
 print("Modelo:", model.name, "· dispositivo:", model.device)
@@ -120,11 +132,18 @@ print("Modelo:", model.name, "· dispositivo:", model.device)
 # ## 4. Configuración del motor: direcciones del latente (B, s) y dirección "brillante" (d)
 
 # %%
-sounds = au.find_sounds(SOUNDS_DIR)
-print(len(sounds), "sonidos en", SOUNDS_DIR)
+if FUENTE == "nsynth":
+    nsynth_folder = nsynth.fetch(NSYNTH_SPLIT, NSYNTH_DIR, NSYNTH_ARCHIVE)
+    notes = nsynth.examples(nsynth_folder)
+    sounds = [n["path"] for n in notes]
+    picked = [n["path"] for n in nsynth.balanced(notes, N_CONFIG_SOUNDS)]
+    print(len(notes), "notas de NSynth", NSYNTH_SPLIT, "·", len(picked), "para la configuración")
+else:
+    sounds = au.find_sounds(SOUNDS_DIR)
+    picked = random.Random(0).sample(sounds, min(N_CONFIG_SOUNDS, len(sounds)))
+    print(len(sounds), "sonidos en", SOUNDS_DIR)
 
 if NEW_CONFIG:
-    picked = random.Random(0).sample(sounds, min(N_CONFIG_SOUNDS, len(sounds)))
     means, centroids, used = [], [], []
     for i, path in enumerate(picked):
         try:
@@ -132,7 +151,7 @@ if NEW_CONFIG:
             x = au.to_model_input(raw, rate)
             means.append(model.encode(x).mean(axis=1))
             centroids.append(au.spectral_centroid(x))
-            used.append(str(path.relative_to(SOUNDS_DIR)))
+            used.append(path.name)
         except Exception as error:  # un archivo raro no debe parar todo
             print("Saltado:", path.name, "·", error)
         if (i + 1) % 50 == 0:
@@ -158,8 +177,14 @@ if config["stats"]["sounds"] < 100:
 
 # %%
 settings = MutationSettings(sigma=SIGMA, lean_k=LEAN_K, leash=LEASH)
-by_name = {p.name: p for p in sounds}
-seeds = [by_name[name] for name in SEEDS] if SEEDS else random.Random(1).sample(sounds, min(N_SEEDS, len(sounds)))
+by_name = {p.stem: p for p in sounds} | {p.name: p for p in sounds}
+if SEEDS:
+    seeds = [by_name[name] for name in SEEDS]
+elif FUENTE == "nsynth":
+    seeds = [n["path"] for n in nsynth.seeds_per_family(notes, SEEDS_PER_FAMILY, SEED_PITCH)]
+else:
+    seeds = random.Random(1).sample(sounds, min(N_SEEDS, len(sounds)))
+print("Semillas:", [p.stem for p in seeds])
 
 run_dir = OUTPUT_DIR / CONFIG_PATH.stem
 pages, summaries = [], []

@@ -35,8 +35,12 @@ def build(mean_latents: np.ndarray, centroids_hz: np.ndarray, spread: float = 3.
     m = np.asarray(mean_latents, np.float64)
     centre = m.mean(axis=0)
     _, sing, vt = np.linalg.svd(m - centre, full_matrices=False)
-    basis = vt[:COUNT].T                                  # (64, 11), orthonormal columns
-    std = sing[:COUNT] / np.sqrt(max(len(m) - 1, 1))
+    k = min(COUNT, len(sing))
+    basis = np.zeros((m.shape[1], COUNT))                 # (64, 11), orthonormal columns
+    basis[:, :k] = vt[:k].T                               # fewer sounds than 11: extra columns stay 0
+    std = np.zeros(COUNT)
+    std[:k] = sing[:k] / np.sqrt(max(len(m) - 1, 1))
+    std = np.maximum(std, 1e-6)                           # a direction without variation stays still
     scale = 2.0 * spread * std                            # coords 0..1 -> -spread..+spread std
 
     coords = ((m - centre) @ basis) / scale               # each sound in coordinate units
@@ -49,7 +53,7 @@ def build(mean_latents: np.ndarray, centroids_hz: np.ndarray, spread: float = 3.
     norm = float(np.linalg.norm(w))
     direction = w / norm if norm > 0 else np.zeros(COUNT)
 
-    variance = sing ** 2
+    variance = np.maximum(sing ** 2, 1e-30)
     return {
         "basis": basis.tolist(),
         "scale": scale.tolist(),
