@@ -2,15 +2,21 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_dsp/juce_dsp.h>
+
+#include "PlantSession.h"
+#include "engine/Sampler.h"
+#include "engine/Scale.h"
 
 // Parameter IDs are stored in DAW sessions and automation lanes:
 // never rename one once a build has been shared.
 namespace ParamIDs
 {
-    inline const juce::ParameterID azimuth   { "azimuth",   1 };
-    inline const juce::ParameterID elevation { "elevation", 1 };
-    inline const juce::ParameterID radius    { "radius",    1 };
-    inline const juce::ParameterID gain      { "gain",      1 };
+    inline const juce::ParameterID wild      { "wild",      1 };
+    inline const juce::ParameterID space     { "space",     1 };
+    inline const juce::ParameterID volume    { "volume",    1 };
+    inline const juce::ParameterID scaleRoot { "scaleRoot", 1 };
+    inline const juce::ParameterID scaleType { "scaleType", 1 };
 }
 
 class VAESynthProcessor final : public juce::AudioProcessor
@@ -32,7 +38,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 3.0; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -44,17 +50,27 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState& getState() noexcept { return state; }
+    PlantSession& getSession() noexcept                     { return session; }
+    vae::Scale currentScale() const noexcept;
+
+    // Counts MIDI notes played, so the editor can ripple the playing bud.
+    int getNotesPlayed() const noexcept { return notesPlayed.load(); }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState state;
+    std::atomic<float>* spaceParam = nullptr;
+    std::atomic<float>* volumeParam = nullptr;
+    std::atomic<float>* rootParam = nullptr;
+    std::atomic<float>* scaleParam = nullptr;
 
-    // Temporary test tone so the skeleton can be checked in a DAW:
-    // a plain sine per MIDI note. Replaced by the granular engine in v0.
-    juce::Synthesiser testSynth;
+    PlantSession session;
+    vae::Sampler sampler;
+    juce::Reverb reverb;
+    juce::dsp::Limiter<float> limiter;
     juce::SmoothedValue<float> outputGain;
-    std::atomic<float>* gainParam = nullptr;
+    std::atomic<int> notesPlayed { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VAESynthProcessor)
 };
