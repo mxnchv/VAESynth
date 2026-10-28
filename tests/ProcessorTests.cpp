@@ -127,6 +127,22 @@ int main()
         check (session.waitUntilRendered (20000), "the stretched plant renders");
         p.getState().getParameter (ParamIDs::wild.getParamID())->setValueNotifyingHost (0.5f);
 
+        // The recipe engine: same plant, every note rebuilt.
+        const auto shapeBefore = session.getShapeVersion();
+        const auto traitsBefore = session.getPlant().nodes[3].traits;
+        session.setEngine (PlantSession::Engine::recipe);
+        check (session.getShapeVersion() == shapeBefore && session.getPlant().nodes[3].traits == traitsBefore,
+               "switching engine keeps the same plant");
+        session.select (3);
+        check (session.waitUntilRendered (60000), "with the recipe engine the plant, the rebuilt seed and the notes render");
+        const auto playable = session.getPlayableSounds();
+        check (playable != nullptr && playable->notes[(size_t) session.getHomeNote() + 12] != nullptr
+                   && playable->forNote (session.getHomeNote() + 12)->rootNote == session.getHomeNote() + 12,
+               "the picked bud has its own sound for each note");
+        check (render (p, 40, session.getHomeNote() + 12) > 1.0e-3f, "MIDI plays a rebuilt note");
+        session.auditionRebuiltSeed();
+        check (render (p, 40, -1) > 1.0e-3f, "the rebuilt seed can be heard");
+
         session.goTo (0);
         check (session.getCurrentGeneration() == 0, "you can go back to an earlier seed");
         session.goTo (1);
@@ -156,6 +172,7 @@ int main()
             same = session.getPlant().nodes[i].traits == savedTraits[i];
         check (same, "the restored plant is the same plant");
         check (session.getSelected() == 3, "the picked bud is restored");
+        check (session.getEngine() == PlantSession::Engine::recipe, "the engine is restored");
         check (session.getHomeNote() == 52, "the sample is reloaded from its file");
         check (std::abs (p.getState().getParameter (ParamIDs::space.getParamID())->getValue() - 0.8f) < 1.0e-4f, "parameters are restored");
         check (session.waitUntilRendered (20000) && render (p, 40, 52) > 1.0e-3f, "the restored session sounds");

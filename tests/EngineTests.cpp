@@ -4,6 +4,9 @@
 #include "../Source/engine/Plant.h"
 #include "../Source/engine/Sampler.h"
 #include "../Source/engine/Scale.h"
+#include "../Source/engine/RecipeEngine.h"
+
+#include <juce_dsp/juce_dsp.h>
 
 #include <iostream>
 
@@ -60,6 +63,52 @@ namespace
         vae::Traits t {};
         for (auto& v : t) v = rng.uniform();
         return t;
+    }
+
+    // A tone with a fixed colour: partials follow a resonance around `formant` Hz.
+    juce::AudioBuffer<float> formantTone (double f0, double formant, double seconds, double rate = 44100.0)
+    {
+        juce::AudioBuffer<float> b (1, (int) (seconds * rate));
+        b.clear();
+        for (int k = 1; k * f0 < 15000.0; ++k)
+        {
+            const auto octaves = std::log2 (k * f0 / formant);
+            const auto amplitude = 0.25 * std::exp (-0.5 * octaves * octaves / 0.25) + 0.01 / k;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.addSample (0, i, (float) (amplitude * std::sin (juce::MathConstants<double>::twoPi * k * f0 * i / rate) * std::exp (-1.2 * i / rate)));
+        }
+        return b;
+    }
+
+    // Spectral centroid in Hz of the first `seconds`, from a plain DFT on a few frames.
+    double centroid (const juce::AudioBuffer<float>& b, double rate)
+    {
+        juce::dsp::FFT fft (12);
+        std::vector<float> data (8192, 0.0f);
+        double num = 0.0, den = 0.0;
+        for (int start = 2048; start + 4096 < juce::jmin (b.getNumSamples(), 30000); start += 4096)
+        {
+            std::fill (data.begin(), data.end(), 0.0f);
+            for (int i = 0; i < 4096; ++i)
+                data[(size_t) i] = b.getSample (0, start + i) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / 4096.0f));
+            fft.performFrequencyOnlyForwardTransform (data.data());
+            for (int k = 1; k < 2048; ++k)
+            {
+                num += k * rate / 4096.0 * data[(size_t) k];
+                den += data[(size_t) k];
+            }
+        }
+        return num / juce::jmax (1.0e-9, den);
+    }
+
+    float soundingSeconds (const juce::AudioBuffer<float>& b, double rate)
+    {
+        const auto peak = b.getMagnitude (0, b.getNumSamples());
+        int last = 0;
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            if (std::abs (b.getSample (0, i)) > peak * 0.05f)
+                last = i;
+        return (float) (last / rate);
     }
 }
 
@@ -217,6 +266,98 @@ int main()
         for (int i = 0; same && i < again1->audio.getNumSamples(); ++i)
             same = juce::exactlyEqual (again1->audio.getSample (0, i), again2->audio.getSample (0, i));
         check (same, "rendering is deterministic");
+    }
+
+
+    // ---- recipe: take a sound apart and rebuild it
+    {
+        const double rate = 44100.0;
+        const auto tone = formantTone (220.0, 1200.0, 2.0);
+        const auto recipe = vae::analyse (tone, rate, 57);
+        const auto rebuilt = vae::resynthesise (*recipe, 57, {}, 10.0, 1);
+
+        const auto levelIn = tone.getRMSLevel (0, 0, tone.getNumSamples());
+        const auto levelOut = rebuilt.getRMSLevel (0, 0, rebuilt.getNumSamples());
+        check (std::abs (juce::Decibels::gainToDecibels (levelOut / levelIn)) < 1.0f, "a rebuilt tone has the same level (within 1 dB)");
+        check (std::abs (centroid (rebuilt, rate) / centroid (tone, rate) - 1.0) < 0.08, "a rebuilt tone has the same colour");
+
+        // An octave up keeps its length and its colour, unlike a sampler.
+        const auto up = vae::resynthesise (*recipe, 69, {}, 10.0, 1);
+        check (vae::detectRootNote (up, rate) == 69, "a rebuilt note sounds at the note asked for");
+        check (std::abs (soundingSeconds (up, rate) - soundingSeconds (tone, rate)) < 0.15f, "an octave up lasts as long as the original");
+        const auto colourShift = centroid (up, rate) / centroid (tone, rate);
+        check (colourShift < 1.35, "an octave up keeps its colour (centroid x" + juce::String (colourShift, 2) + ", a sampler gives x2)");
+
+        juce::Random random (11);
+        juce::AudioBuffer<float> noise (1, (int) rate);
+        for (int i = 0; i < noise.getNumSamples(); ++i)
+            noise.setSample (0, i, (random.nextFloat() * 2.0f - 1.0f) * 0.3f);
+        const auto noiseOut = vae::resynthesise (*vae::analyse (noise, rate, 60), 60, {}, 10.0, 3);
+        const auto noiseRatio = noiseOut.getRMSLevel (0, 2048, noiseOut.getNumSamples() - 4096) / noise.getRMSLevel (0, 0, noise.getNumSamples());
+        check (std::abs (juce::Decibels::gainToDecibels (noiseRatio)) < 2.0f, "rebuilt noise has the same level (within 2 dB)");
+
+        // Every gene changes the sound and stays clean.
+        auto genesWith = [] (auto setter) { vae::Genes g; setter (g); return g; };
+        const std::pair<const char*, vae::Genes> changes[] {
+            { "tilt",      genesWith ([] (vae::Genes& g) { g.tilt = 0.8f; }) },
+            { "even/odd",  genesWith ([] (vae::Genes& g) { g.evenOdd = 0.9f; }) },
+            { "inharmonic",genesWith ([] (vae::Genes& g) { g.inharmonic = 0.9f; }) },
+            { "formant",   genesWith ([] (vae::Genes& g) { g.formant = 0.8f; }) },
+            { "attack",    genesWith ([] (vae::Genes& g) { g.attack = 0.7f; }) },
+            { "decay",     genesWith ([] (vae::Genes& g) { g.decay = -0.7f; }) },
+            { "body",      genesWith ([] (vae::Genes& g) { g.body = 0.8f; }) },
+            { "noise",     genesWith ([] (vae::Genes& g) { g.noise = 0.9f; }) },
+            { "chorus",    genesWith ([] (vae::Genes& g) { g.chorus = 0.8f; }) },
+            { "octave",    genesWith ([] (vae::Genes& g) { g.octaveLayer = 1; g.octaveGain = 0.6f; }) },
+            { "reversed",  genesWith ([] (vae::Genes& g) { g.reversed = true; }) },
+        };
+        for (const auto& [name, genes] : changes)
+        {
+            const auto bud = vae::resynthesise (*recipe, 57, genes, 4.5, 1);
+            double difference = 0.0, finiteOk = 1.0;
+            for (int i = 0; i < juce::jmin (bud.getNumSamples(), rebuilt.getNumSamples()); ++i)
+            {
+                difference += std::abs (bud.getSample (0, i) - rebuilt.getSample (0, i));
+                if (! std::isfinite (bud.getSample (0, i))) finiteOk = 0.0;
+            }
+            check (finiteOk > 0.0 && bud.getMagnitude (0, bud.getNumSamples()) <= 0.951f && difference > 5.0,
+                   juce::String ("recipe gene ") + name + " changes the sound and stays clean");
+        }
+
+        const auto stretched = vae::resynthesise (*recipe, 57, genesWith ([] (vae::Genes& g) { g.inharmonic = 1.0f; }), 4.5, 1);
+        check (vae::detectRootNote (stretched, rate) != 57 || centroid (stretched, rate) > centroid (rebuilt, rate) * 1.05,
+               "the inharmonic gene moves the partials");
+
+        // The engine: the seed at its own note is the original; other notes are rebuilt.
+        vae::RecipeVariationEngine recipeEngine;
+        auto source = std::make_shared<vae::SeedSource>();
+        source->kind = vae::SeedSource::Kind::sample;
+        source->audio = tone;
+        source->sampleRate = rate;
+        source->rootNote = 57;
+        const auto seed = recipeEngine.renderNote (vae::sampleNeutral, *source, 57);
+        auto identical = seed->audio.getNumSamples() == tone.getNumSamples();
+        for (int i = 0; identical && i < tone.getNumSamples(); ++i)
+            identical = juce::exactlyEqual (seed->audio.getSample (0, i), tone.getSample (0, i));
+        check (identical, "with the recipe engine the seed at its own note is still the original");
+        const auto seedUp = recipeEngine.renderNote (vae::sampleNeutral, *source, 64);
+        check (seedUp->rootNote == 64 && vae::detectRootNote (seedUp->audio, rate) == 64, "the seed at another note is rebuilt at that note");
+
+        vae::Rng rng (21);
+        auto allClean = true;
+        for (int i = 0; i < 25; ++i)
+        {
+            const auto t = randomTraits (rng);
+            const auto st1 = measure (*recipeEngine.renderNote (t, *source, 50 + i));
+            const auto st2 = measure (*recipeEngine.renderNote (t, *vae::makeLibrarySource (i % 5), 48 + i));
+            allClean = allClean && st1.finite && st2.finite && st1.peak <= 0.951f && st2.peak <= 0.951f && st1.rms > 1.0e-3 && st2.rms > 1.0e-3;
+        }
+        check (allClean, "random recipe buds always render finite, audible, bounded and level with the seed");
+
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 10; ++i)
+            recipeEngine.renderNote (randomTraits (rng), *source, 57);
+        std::cout << "      (recipe bud render: " << juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 10.0, 1) << " ms each)" << std::endl;
     }
 
     // ---- names

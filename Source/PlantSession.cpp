@@ -138,7 +138,9 @@ void PlantSession::select (int nodeIndex)
 
     const juce::ScopedLock sl (lock);
     playableNode = juce::jmax (0, selected);
+    scheduleNotes();
     publishPlayable();
+    notify();
 }
 
 void PlantSession::audition (int nodeIndex, int note, float velocity, float pan)
@@ -151,6 +153,40 @@ void PlantSession::audition (int nodeIndex, int note, float velocity, float pan)
         sound = sounds[(size_t) nodeIndex];
     }
 
+    pushAudition (sound, note, velocity, pan);
+}
+
+void PlantSession::auditionRebuiltSeed()
+{
+    vae::RenderedSound::Ptr sound;
+    {
+        const juce::ScopedLock sl (lock);
+        sound = rebuiltSeed;
+    }
+
+    pushAudition (sound, getHomeNote(), 0.8f, 0.0f);
+}
+
+void PlantSession::setEngine (Engine kind)
+{
+    if (kind == engineKind)
+        return;
+
+    // Same plant, same picked bud, rendered by the other engine.
+    engineKind = kind;
+    if (hasPlant())
+        growCurrent (true);
+}
+
+const vae::VariationEngine& PlantSession::activeEngine() const
+{
+    if (engineKind == Engine::recipe)
+        return recipeEngine;
+    return engine;
+}
+
+void PlantSession::pushAudition (const vae::RenderedSound::Ptr& sound, int note, float velocity, float pan)
+{
     if (sound == nullptr || auditionFifo.getFreeSpace() == 0)
         return;
 
@@ -198,7 +234,7 @@ void PlantSession::pushGeneration (Generation generation)
 void PlantSession::growCurrent (bool keepSelection)
 {
     const auto& generation = history[(size_t) current];
-    plant = vae::Plant::grow (generation.traits, generation.wild, generation.rngSeed, engine);
+    plant = vae::Plant::grow (generation.traits, generation.wild, generation.rngSeed, activeEngine());
     if (! keepSelection || selected >= (int) plant.nodes.size())
         selected = -1;
     ++plantVersion;
@@ -217,87 +253,139 @@ void PlantSession::growCurrent (bool keepSelection)
     for (const auto& node : plant.nodes)
         traits.push_back (node.traits);
 
+    // With the recipe engine, the rebuilt seed comes right after the seed.
+    if (engineKind == Engine::recipe)
+        order.insert (order.begin() + 1, -1);
+
     {
         const juce::ScopedLock sl (lock);
         ++renderJob;
+        jobEngine = &activeEngine();
         jobSource = generation.source;
         jobTraits = std::move (traits);
         jobOrder = std::move (order);
+        budCursor = 0;
+        rebuiltSeed = nullptr;
         sounds.assign (plant.nodes.size(), nullptr);
         playableNode = juce::jmax (0, selected);
+        scheduleNotes();
         publishPlayable();
     }
 
     notify();
 }
 
+void PlantSession::scheduleNotes()
+{
+    // Called with `lock` held. The notes around home, nearest first, so what
+    // you are most likely to play is ready first.
+    ++noteJob;
+    noteSounds.fill (nullptr);
+    noteOrder.clear();
+    noteCursor = notesDone = 0;
+
+    if (jobEngine == nullptr || ! jobEngine->rendersEveryNote() || playableNode >= (int) jobTraits.size())
+        return;
+
+    noteTraits = jobTraits[(size_t) playableNode];
+    const auto home = getHomeNote();
+    for (int distance = 0; distance <= 24; ++distance)
+        for (auto note : { home + distance, home - distance })
+            if (note >= 0 && note < 128 && (distance > 0 || note == home) && std::find (noteOrder.begin(), noteOrder.end(), note) == noteOrder.end())
+                noteOrder.push_back (note);
+}
+
 void PlantSession::run()
 {
-    int handledJob = 0;
-
     while (! threadShouldExit())
     {
-        int job;
+        // One task at a time, picked under the lock: notes of the picked bud
+        // first (they are what MIDI plays), then the buds.
+        enum class Task { none, note, bud, rebuilt };
+        auto task = Task::none;
+        int job = 0, index = -1, note = 0;
+        const vae::VariationEngine* taskEngine = nullptr;
         vae::SeedSourcePtr source;
-        std::vector<vae::Traits> traits;
-        std::vector<int> order;
+        vae::Traits traits {};
         {
             const juce::ScopedLock sl (lock);
-            job = renderJob;
+            if (jobSource != nullptr && noteCursor < noteOrder.size())
+            {
+                task = Task::note;
+                job = noteJob;
+                note = noteOrder[noteCursor++];
+                traits = noteTraits;
+            }
+            else if (jobSource != nullptr && budCursor < jobOrder.size())
+            {
+                job = renderJob;
+                index = jobOrder[budCursor++];
+                task = index < 0 ? Task::rebuilt : Task::bud;
+                if (index >= 0)
+                    traits = jobTraits[(size_t) index];
+            }
+            taskEngine = jobEngine;
             source = jobSource;
-            traits = jobTraits;
-            order = jobOrder;
         }
 
-        if (job == handledJob || source == nullptr)
+        if (task == Task::none)
         {
             wait (-1);
             continue;
         }
 
-        for (auto index : order)
+        vae::RenderedSound::Ptr sound;
+        if (task == Task::note)             sound = taskEngine->renderNote (traits, *source, note);
+        else if (task == Task::rebuilt)     sound = recipeEngine.renderRebuiltSeed (*source);
+        else                                sound = taskEngine->render (traits, *source);
+
+        const juce::ScopedLock sl (lock);
+
+        if (task == Task::note)
         {
-            if (threadShouldExit())
-                return;
-
-            {
-                const juce::ScopedLock sl (lock);
-                if (renderJob != job)
-                    break;
-            }
-
-            auto sound = engine.render (traits[(size_t) index], *source);
-
-            const juce::ScopedLock sl (lock);
-            if (renderJob != job)
-                break;
-
-            // An engine that could not render this bud leaves it unlit and silent.
+            if (job != noteJob)
+                continue;
+            ++notesDone;
             if (sound == nullptr)
                 continue;
-
-            sounds[(size_t) index] = sound;
+            noteSounds[(size_t) note] = sound;
             keepAlive.push_back (sound);
-            if (index == playableNode)
-                publishPlayable();
+            publishPlayable();
+            continue;
         }
 
-        handledJob = job;
+        // An engine that could not render this bud leaves it unlit and silent.
+        if (job != renderJob || sound == nullptr)
+            continue;
+
+        keepAlive.push_back (sound);
+        if (task == Task::rebuilt)
+        {
+            rebuiltSeed = sound;
+            continue;
+        }
+
+        sounds[(size_t) index] = sound;
+        if (index == playableNode)
+            publishPlayable();
     }
 }
 
 void PlantSession::publishPlayable()
 {
-    // Called with `lock` held.
-    vae::RenderedSound::Ptr sound;
+    // Called with `lock` held. A new set every time: the audio thread may
+    // still be reading the previous one, which `keepAliveSets` keeps alive.
+    PlayableSounds::Ptr set (new PlayableSounds());
     if (playableNode < (int) sounds.size())
-        sound = sounds[(size_t) playableNode];
+        set->base = sounds[(size_t) playableNode];
+    set->notes = noteSounds;
+    keepAliveSets.push_back (set);
 
     const juce::SpinLock::ScopedLockType sl (playableLock);
-    playable = sound;
+    playable = set;
 }
 
-vae::RenderedSound::Ptr PlantSession::getPlayableSound()
+PlantSession::PlayableSounds::Ptr PlantSession::getPlayableSounds()
 {
     const juce::SpinLock::ScopedTryLockType sl (playableLock);
     return sl.isLocked() ? playable : nullptr;
@@ -310,6 +398,9 @@ void PlantSession::timerCallback()
     keepAlive.erase (std::remove_if (keepAlive.begin(), keepAlive.end(),
                                      [] (const vae::RenderedSound::Ptr& s) { return s->getReferenceCount() == 1; }),
                      keepAlive.end());
+    keepAliveSets.erase (std::remove_if (keepAliveSets.begin(), keepAliveSets.end(),
+                                         [] (const PlayableSounds::Ptr& s) { return s->getReferenceCount() == 1; }),
+                         keepAliveSets.end());
 }
 
 bool PlantSession::waitUntilRendered (int timeoutMs)
@@ -319,7 +410,9 @@ bool PlantSession::waitUntilRendered (int timeoutMs)
     {
         {
             const juce::ScopedLock sl (lock);
-            if (std::all_of (sounds.begin(), sounds.end(), [] (const auto& s) { return s != nullptr; }))
+            if (std::all_of (sounds.begin(), sounds.end(), [] (const auto& s) { return s != nullptr; })
+                && notesDone >= noteOrder.size()
+                && (engineKind != Engine::recipe || rebuiltSeed != nullptr))
                 return true;
         }
         juce::Thread::sleep (5);
@@ -334,6 +427,7 @@ juce::ValueTree PlantSession::toValueTree() const
     juce::ValueTree tree ("Plant");
     tree.setProperty ("current", current, nullptr);
     tree.setProperty ("selected", selected, nullptr);
+    tree.setProperty ("engine", engineKind == Engine::recipe ? "recipe" : "effects", nullptr);
 
     // Each sound file is stored once, with its audio, and generations point to it.
     std::map<const vae::SeedSource*, int> sourceIds;
@@ -441,6 +535,7 @@ void PlantSession::restore (const juce::ValueTree& tree)
     }
 
     history = std::move (restored);
+    engineKind = tree["engine"].toString() == "recipe" ? Engine::recipe : Engine::effects;
     current = juce::jlimit (0, (int) history.size() - 1, (int) tree.getProperty ("current", 0));
     growCurrent();
     select ((int) tree.getProperty ("selected", -1));

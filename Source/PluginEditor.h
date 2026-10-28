@@ -16,6 +16,7 @@ public:
     void resized() override;
 
     juce::TextButton newSeedButton { "New seed" };
+    juce::TextButton effectsButton { "Effects" }, recipeButton { "Recipe" };
 
 private:
     juce::ComboBox rootBox, scaleBox;
@@ -30,9 +31,10 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void setInfo (const juce::String& name, const juce::String& detail, bool canPlant, bool canGoBack);
+    void setInfo (const juce::String& name, const juce::String& detail, bool canPlant, bool canGoBack, bool canHearRebuilt);
 
     juce::TextButton plantButton { "Plant this" }, backButton { "Back" }, regrowButton { "Regrow" };
+    juce::TextButton rebuiltButton { "Hear it rebuilt" };
     std::function<void()> onWildReleased;
 
 private:

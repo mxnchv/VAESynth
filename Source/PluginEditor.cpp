@@ -37,7 +37,7 @@ TopBand::TopBand (VAESynthProcessor& p)
     scaleBox.setSelectedItemIndex ((int) p.getState().getParameterAsValue (ParamIDs::scaleType.getParamID()).getValue(), juce::dontSendNotification);
 
     buttonStyle::setStrong (newSeedButton);
-    for (auto* c : std::initializer_list<juce::Component*> { &rootBox, &scaleBox, &newSeedButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &rootBox, &scaleBox, &newSeedButton, &effectsButton, &recipeButton })
         addAndMakeVisible (c);
 }
 
@@ -49,6 +49,7 @@ void TopBand::paint (juce::Graphics& g)
 
     theme::drawLabel (g, "Key", rootBox.getBounds().withY (rootBox.getY() - 18).withHeight (14));
     theme::drawLabel (g, "Scale", scaleBox.getBounds().withY (scaleBox.getY() - 18).withHeight (14));
+    theme::drawLabel (g, "Engine", effectsButton.getBounds().withY (effectsButton.getY() - 18).withHeight (14).withWidth (80));
 }
 
 void TopBand::resized()
@@ -59,6 +60,10 @@ void TopBand::resized()
     scaleBox.setBounds (row.removeFromRight (150));
     row.removeFromRight (24);
     rootBox.setBounds (row.removeFromRight (56));
+    row.removeFromRight (32);
+    recipeButton.setBounds (row.removeFromRight (52));
+    row.removeFromRight (10);
+    effectsButton.setBounds (row.removeFromRight (52));
 }
 
 // ---------------------------------------------------------------- bottom band
@@ -73,11 +78,11 @@ BottomBand::BottomBand (VAESynthProcessor& p)
     wild.onDragEnd = [this] { if (onWildReleased) onWildReleased(); };
 
     buttonStyle::setStrong (plantButton);
-    for (auto* b : { &plantButton, &backButton, &regrowButton })
+    for (auto* b : { &plantButton, &backButton, &regrowButton, &rebuiltButton })
         addAndMakeVisible (b);
 }
 
-void BottomBand::setInfo (const juce::String& name, const juce::String& detail, bool canPlant, bool canGoBack)
+void BottomBand::setInfo (const juce::String& name, const juce::String& detail, bool canPlant, bool canGoBack, bool canHearRebuilt)
 {
     if (name != infoName || detail != infoDetail)
     {
@@ -86,10 +91,11 @@ void BottomBand::setInfo (const juce::String& name, const juce::String& detail, 
         repaint();
     }
 
-    if (plantButton.isVisible() != canPlant || backButton.isVisible() != canGoBack)
+    if (plantButton.isVisible() != canPlant || backButton.isVisible() != canGoBack || rebuiltButton.isVisible() != canHearRebuilt)
     {
         plantButton.setVisible (canPlant);
         backButton.setVisible (canGoBack);
+        rebuiltButton.setVisible (canHearRebuilt);
         resized();
     }
 }
@@ -113,8 +119,8 @@ void BottomBand::resized()
     auto area = getLocalBounds().reduced (margin, 0).withTrimmedBottom (16);
 
     // Only the actions that apply, side by side.
-    auto actions = area.withTrimmedTop (area.getHeight() - 30).removeFromLeft (220);
-    for (auto [button, width] : { std::pair { &plantButton, 80 }, std::pair { &backButton, 50 } })
+    auto actions = area.withTrimmedTop (area.getHeight() - 30).removeFromLeft (360);
+    for (auto [button, width] : { std::pair { &plantButton, 80 }, std::pair { &backButton, 50 }, std::pair { &rebuiltButton, 120 } })
     {
         if (! button->isVisible())
             continue;
@@ -223,6 +229,11 @@ VAESynthEditor::VAESynthEditor (VAESynthProcessor& p)
     bottomBand.backButton.onClick = [this] { session.goTo (session.getCurrentGeneration() - 1); updateInfo(); };
     bottomBand.regrowButton.onClick = [this] { session.regrow(); updateInfo(); };
     bottomBand.onWildReleased = [this] { session.applyWild(); updateInfo(); };
+    bottomBand.rebuiltButton.onClick = [this] { session.auditionRebuiltSeed(); };
+
+    // Effects on the seed, or the seed rebuilt from its recipe: same plant, two engines.
+    topBand.effectsButton.onClick = [this] { session.setEngine (PlantSession::Engine::effects); updateInfo(); };
+    topBand.recipeButton.onClick = [this] { session.setEngine (PlantSession::Engine::recipe); updateInfo(); };
 
     chooser.onLibrarySeed = [this] (int i) { session.chooseLibrarySeed (i); chooser.setVisible (false); updateInfo(); };
     chooser.onOwnSound = [this] { chooseFile(); };
@@ -300,7 +311,10 @@ void VAESynthEditor::updateInfo()
         detail << "  ·  sweep the buds to hear its variations";
     }
 
-    bottomBand.setInfo (name, detail, selected > 0, generation > 0);
+    const auto recipe = session.getEngine() == PlantSession::Engine::recipe;
+    topBand.effectsButton.setToggleState (! recipe, juce::dontSendNotification);
+    topBand.recipeButton.setToggleState (recipe, juce::dontSendNotification);
+    bottomBand.setInfo (name, detail, selected > 0, generation > 0, recipe && selected <= 0);
 }
 
 void VAESynthEditor::wake()
