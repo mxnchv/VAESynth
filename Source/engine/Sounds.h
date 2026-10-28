@@ -22,6 +22,10 @@ namespace vae
         double sampleRate = 44100.0;
         int rootNote = 60;               // detected, or C4 when it has no clear pitch
         bool pitched = false;
+
+        // The audio as lossless FLAC in base64, saved inside the DAW session so
+        // a sound is never lost when its file moves. Encoded once, on load.
+        juce::String embeddedAudio;
     };
 
     using SeedSourcePtr = std::shared_ptr<const SeedSource>;
@@ -39,6 +43,12 @@ namespace vae
     // Detects the note of a one-shot: YIN over short windows, median of the
     // pitched ones. Returns -1 when less than 30 % of the windows are pitched.
     int detectRootNote (const juce::AudioBuffer<float>& audio, double sampleRate);
+
+    juce::String encodeAudio (const juce::AudioBuffer<float>& audio, double sampleRate);
+
+    // Rebuilds a sample seed from `embeddedAudio`. Returns nullptr if it cannot be decoded.
+    std::shared_ptr<SeedSource> decodeSampleSource (const juce::String& embeddedAudio, const juce::String& name,
+                                                    const juce::File& file, int rootNote, bool pitched);
 
     // The audio of one node, rendered ahead of time. It plays at `rootNote`
     // when not transposed. Shared between the render thread, the UI and voices.

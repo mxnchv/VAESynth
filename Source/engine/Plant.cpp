@@ -8,6 +8,7 @@ namespace vae
     {
         Rng rng (rngSeed);
         Plant plant;
+        const auto strength = minimumWild + (1.0f - minimumWild) * juce::jlimit (0.0f, 1.0f, wild);
 
         PlantNode root;
         root.traits = seed;
@@ -37,7 +38,7 @@ namespace vae
                 child.phase = rng.uniform() * juce::MathConstants<float>::twoPi;
 
                 const MutationRequest request { juce::jlimit (-1.0f, 1.0f, child.angle / 1.1f),
-                                                wild * 0.17f * (0.6f + (float) parent.depth * 0.2f) };
+                                                strength * 0.17f * (0.6f + (float) parent.depth * 0.2f) };
                 child.traits = engine.mutate (parent.traits, request, rng);
 
                 plant.nodes.push_back (child);

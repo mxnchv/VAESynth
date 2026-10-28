@@ -133,6 +133,48 @@ namespace vae
         const auto root = detectRootNote (source->audio, source->sampleRate);
         source->pitched = root >= 0;
         source->rootNote = root >= 0 ? root : 60;
+        source->embeddedAudio = encodeAudio (source->audio, source->sampleRate);
+        return source;
+    }
+
+    juce::String encodeAudio (const juce::AudioBuffer<float>& audio, double sampleRate)
+    {
+        juce::MemoryBlock block;
+        {
+            std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::MemoryOutputStream> (block, false);
+            juce::FlacAudioFormat flac;
+            auto writer = flac.createWriterFor (stream, juce::AudioFormatWriterOptions{}
+                                                            .withSampleRate (sampleRate)
+                                                            .withNumChannels (audio.getNumChannels())
+                                                            .withBitsPerSample (24));
+            if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (audio, 0, audio.getNumSamples()))
+                return {};
+        }
+        return block.toBase64Encoding();
+    }
+
+    std::shared_ptr<SeedSource> decodeSampleSource (const juce::String& embeddedAudio, const juce::String& name,
+                                                    const juce::File& file, int rootNote, bool pitched)
+    {
+        juce::MemoryBlock block;
+        if (embeddedAudio.isEmpty() || ! block.fromBase64Encoding (embeddedAudio))
+            return nullptr;
+
+        juce::FlacAudioFormat flac;
+        std::unique_ptr<juce::AudioFormatReader> reader (flac.createReaderFor (new juce::MemoryInputStream (block, false), true));
+        if (reader == nullptr || reader->lengthInSamples <= 0)
+            return nullptr;
+
+        auto source = std::make_shared<SeedSource>();
+        source->kind = SeedSource::Kind::sample;
+        source->name = name;
+        source->file = file;
+        source->sampleRate = reader->sampleRate;
+        source->audio.setSize (juce::jlimit (1, 2, (int) reader->numChannels), (int) reader->lengthInSamples);
+        reader->read (&source->audio, 0, source->audio.getNumSamples(), 0, true, source->audio.getNumChannels() > 1);
+        source->rootNote = rootNote;
+        source->pitched = pitched;
+        source->embeddedAudio = embeddedAudio;
         return source;
     }
 

@@ -93,12 +93,25 @@ int main()
         check (inRange, "depth and traits stay in range");
         check (a.nodes[0].traits == vae::library[0].traits, "the seed node is the seed itself");
 
-        // Wild 0 keeps every bud on the seed; right-leaning buds are brighter.
+        // Wild at 0 still varies, less than at 1, along the same branches.
+        auto spread = [&] (float wild)
+        {
+            double sum = 0.0;
+            const auto p = vae::Plant::grow (vae::library[1].traits, wild, 7, engine);
+            for (const auto& n : p.nodes)
+                for (size_t k = 0; k < n.traits.size(); ++k)
+                    sum += std::abs (n.traits[k] - vae::library[1].traits[k]);
+            return sum / (double) p.nodes.size();
+        };
+        check (spread (0.0f) > 0.05, "with Wild at 0 the buds still vary a little");
+        check (spread (1.0f) > spread (0.0f) * 2.0, "Wild at 1 varies much more than at 0");
+
         const auto tame = vae::Plant::grow (vae::library[1].traits, 0.0f, 7, engine);
-        auto allSame = true;
-        for (const auto& n : tame.nodes)
-            allSame = allSame && n.traits == vae::library[1].traits;
-        check (allSame, "with Wild at 0 every bud sounds like the seed");
+        const auto wildOne = vae::Plant::grow (vae::library[1].traits, 1.0f, 7, engine);
+        auto sameShape = tame.nodes.size() == wildOne.nodes.size();
+        for (size_t i = 0; sameShape && i < tame.nodes.size(); ++i)
+            sameShape = juce::exactlyEqual (tame.nodes[i].angle, wildOne.nodes[i].angle) && tame.nodes[i].parent == wildOne.nodes[i].parent;
+        check (sameShape, "changing Wild keeps the shape of the plant");
 
         double left = 0.0, right = 0.0;
         int nl = 0, nr = 0;

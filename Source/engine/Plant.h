@@ -26,6 +26,9 @@ namespace vae
         std::vector<PlantNode> nodes;
 
         static constexpr int maxDepth = 4;
+
+        // Wild at 0 still varies a little: a plant of copies of the seed is useless.
+        static constexpr float minimumWild = 0.25f;
         static constexpr float growSeconds = 0.55f;  // how long one stem takes to grow
 
         static Plant grow (const Traits& seed, float wild, std::uint32_t rngSeed, const VariationEngine&);

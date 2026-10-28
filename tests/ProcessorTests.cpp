@@ -117,6 +117,16 @@ int main()
         check (session.getPlant().nodes[0].traits == session.getHistory()[1].traits, "the planted bud is the new seed");
         check (session.waitUntilRendered (20000), "the second plant renders");
 
+        session.select (6);
+        const auto shape = session.getShapeVersion();
+        const auto before = session.getPlant().nodes[6].traits;
+        p.getState().getParameter (ParamIDs::wild.getParamID())->setValueNotifyingHost (1.0f);
+        session.applyWild();
+        check (session.getShapeVersion() == shape && session.getSelected() == 6, "releasing Wild keeps the plant and the picked bud");
+        check (session.getPlant().nodes[6].traits != before, "releasing Wild moves the buds");
+        check (session.waitUntilRendered (20000), "the stretched plant renders");
+        p.getState().getParameter (ParamIDs::wild.getParamID())->setValueNotifyingHost (0.5f);
+
         session.goTo (0);
         check (session.getCurrentGeneration() == 0, "you can go back to an earlier seed");
         session.goTo (1);
@@ -155,7 +165,12 @@ int main()
         sample.deleteFile();
         VAESynthProcessor p;
         p.setStateInformation (saved.getData(), (int) saved.getSize());
-        check (p.getSession().hasPlant() && p.getSession().describeNode (0).startsWith ("Missing"), "a missing file falls back to a library seed and says so");
+        auto& session = p.getSession();
+        check (session.hasPlant() && session.getHistory().size() == 2 && session.getHomeNote() == 52,
+               "a sound survives in the session even after its file is deleted");
+        check (session.getHistory()[0].source->kind == vae::SeedSource::Kind::sample
+                   && session.getHistory()[0].source->audio.getNumSamples() == 88200,
+               "the saved audio is the original sample");
     }
 
     dir.deleteRecursively();

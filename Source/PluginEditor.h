@@ -33,6 +33,7 @@ public:
     void setInfo (const juce::String& name, const juce::String& detail, bool canPlant, bool canGoBack);
 
     juce::TextButton plantButton { "Plant this" }, backButton { "Back" }, regrowButton { "Regrow" };
+    std::function<void()> onWildReleased;
 
 private:
     juce::Slider wild, space, volume;

@@ -40,6 +40,7 @@ public:
     bool loadSeedFile (const juce::File&, juce::String& error);
     void plantNode (int nodeIndex);
     void regrow();
+    void applyWild();  // same plant shape, buds nearer to or further from the seed
     void goTo (int generationIndex);
     void select (int nodeIndex);  // -1: nothing picked, the seed plays
     void audition (int nodeIndex, int note, float velocity, float pan);
@@ -50,6 +51,7 @@ public:
     int getCurrentGeneration() const noexcept           { return current; }
     int getSelected() const noexcept                    { return selected; }
     int getPlantVersion() const noexcept                { return plantVersion; }
+    int getShapeVersion() const noexcept                { return shapeVersion; }  // changes when the plant regrows from scratch
     int getHomeNote() const noexcept;
     bool isRendered (int nodeIndex) const;
     juce::String describeNode (int nodeIndex) const;
@@ -94,7 +96,7 @@ private:
     void timerCallback() override;
 
     void pushGeneration (Generation);
-    void growCurrent();
+    void growCurrent (bool keepSelection = false);
     void publishPlayable();
     static std::uint32_t newRngSeed();
 
@@ -106,6 +108,7 @@ private:
     int current = -1;
     int selected = -1;
     int plantVersion = 0;
+    int shapeVersion = 0;
     vae::Plant plant;
 
     // Shared with the render thread.

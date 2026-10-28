@@ -6,6 +6,7 @@
 
 // Draws the plant and plays it: sweeping over buds auditions them in key,
 // a click picks one, a double click plants it. Earlier seeds lie underground.
+// A note lights the sap from the seed up to the bud and runs down the roots.
 class PlantView final : public juce::Component
 {
 public:
@@ -14,6 +15,9 @@ public:
     // Vertical span the plant may use, in local coordinates: the seed sits at
     // `bottom`, the highest buds reach about `top`.
     void setPlantArea (float top, float bottom);
+
+    // Room the roots need under the seed.
+    static constexpr float rootDepth = 90.0f;
 
     void paint (juce::Graphics&) override;
     void mouseMove (const juce::MouseEvent&) override;
@@ -26,6 +30,13 @@ public:
 
 private:
     struct Ripple { int node; double start; };
+    struct Pulse { int node; double start; float strength; };
+    struct Root { int parent; int depth; float angle, length, born; };
+
+    void growRoots (std::uint32_t seed);
+    void addPulse (int node, float velocity, double now);
+    void paintRoots (juce::Graphics&) const;
+    void paintLights (juce::Graphics&, double now) const;
 
     void frame();
     void layout (double now);
@@ -49,6 +60,10 @@ private:
     std::vector<juce::Point<float>> positions;
     std::vector<float> growth;
     std::vector<Ripple> ripples;
+    std::vector<Pulse> pulses;
+    std::vector<Root> roots;
+    std::vector<juce::Point<float>> rootFrom, rootTo;
+    std::vector<float> rootDistance, rootGrowth;
     std::vector<juce::Point<float>> historySpots;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PlantView)

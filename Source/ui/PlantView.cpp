@@ -1,12 +1,24 @@
 #include "PlantView.h"
 #include "Theme.h"
 
+#include <functional>
+
 namespace
 {
     double nowSeconds() { return juce::Time::getMillisecondCounterHiRes() / 1000.0; }
 
     constexpr float hitRadius = 14.0f;
     constexpr double rippleSeconds = 1.2;
+    constexpr double pulseSeconds = 2.0;
+
+    // A point along the curved stem from parent a to child b, t in 0..1.
+    juce::Point<float> stemPoint (juce::Point<float> a, juce::Point<float> b, float t)
+    {
+        const juce::Point<float> control ((a.x + b.x) * 0.5f + (b.y - a.y) * 0.08f,
+                                          (a.y + b.y) * 0.5f - (b.x - a.x) * 0.08f);
+        const auto u = 1.0f - t;
+        return a * (u * u) + control * (2.0f * u * t) + b * (t * t);
+    }
 }
 
 PlantView::PlantView (VAESynthProcessor& p)
@@ -25,25 +37,32 @@ void PlantView::frame()
 {
     const auto now = nowSeconds();
 
-    if (session.getPlantVersion() != seenVersion)
+    // A plant grown from scratch replays its growth; a Wild change only re-renders.
+    if (session.getShapeVersion() != seenVersion)
     {
-        seenVersion = session.getPlantVersion();
+        seenVersion = session.getShapeVersion();
         plantStart = now;
         hovered = -1;
         ripples.clear();
+        pulses.clear();
+        if (session.hasPlant())
+            growRoots (session.getHistory()[(size_t) session.getCurrentGeneration()].rngSeed);
     }
 
-    // A MIDI note ripples the bud that is playing.
+    // A MIDI note lights the bud that is playing.
     const auto notes = processor.getNotesPlayed();
     if (notes != seenNotes)
     {
         seenNotes = notes;
-        ripples.push_back ({ juce::jmax (0, session.getSelected()), now });
+        addPulse (juce::jmax (0, session.getSelected()), 0.8f, now);
     }
 
     ripples.erase (std::remove_if (ripples.begin(), ripples.end(),
                                    [now] (const Ripple& r) { return now - r.start > rippleSeconds; }),
                    ripples.end());
+    pulses.erase (std::remove_if (pulses.begin(), pulses.end(),
+                                  [now] (const Pulse& p) { return now - p.start > pulseSeconds; }),
+                  pulses.end());
 
     layout (now);
     repaint();
@@ -80,6 +99,146 @@ void PlantView::layout (double now)
         positions[i] = { parent.x + std::sin (angle) * length, parent.y - std::cos (angle) * length };
         growth[i] = grow;
     }
+
+    // Roots: wide and shallow under the seed.
+    const auto rootStart = juce::Point<float> (width * 0.5f, areaBottom + 4.0f);
+    rootFrom.assign (roots.size(), {});
+    rootTo.assign (roots.size(), {});
+    rootDistance.assign (roots.size(), 0.0f);
+    rootGrowth.assign (roots.size(), 0.0f);
+
+    for (size_t i = 0; i < roots.size(); ++i)
+    {
+        const auto& r = roots[i];
+        const auto from = r.parent < 0 ? rootStart : rootTo[(size_t) r.parent];
+        const auto grow = juce::jlimit (0.0f, 1.0f, (elapsed - r.born) / 0.5f);
+        const auto length = r.length * rootDepth * (1.0f - std::pow (1.0f - grow, 3.0f));
+
+        rootFrom[i] = from;
+        rootTo[i] = { from.x + std::sin (r.angle) * length * 1.7f, from.y + std::cos (r.angle) * length * 0.75f };
+        rootDistance[i] = (r.parent < 0 ? 0.0f : rootDistance[(size_t) r.parent] + roots[(size_t) r.parent].length * rootDepth);
+        rootGrowth[i] = grow;
+    }
+}
+
+void PlantView::growRoots (std::uint32_t seed)
+{
+    vae::Rng rng (seed ^ 0x9e3779b9u);
+    roots.clear();
+
+    std::function<void (int, float, float, int, float)> branch = [&] (int parent, float angle, float length, int depth, float born)
+    {
+        const auto index = (int) roots.size();
+        roots.push_back ({ parent, depth, angle, length, born });
+        if (depth >= 4)
+            return;
+
+        const auto count = rng.uniform() < (depth == 1 ? 0.85f : 0.55f) ? 2 : 1;
+        for (int i = 0; i < count; ++i)
+        {
+            const auto turn = count == 1 ? rng.gauss() * 0.3f : (i > 0 ? 1.0f : -1.0f) * (0.3f + rng.uniform() * 0.35f);
+            branch (index, juce::jlimit (-1.45f, 1.45f, angle + turn), length * (0.6f + rng.uniform() * 0.2f),
+                    depth + 1, born + 0.18f + rng.uniform() * 0.12f);
+        }
+    };
+
+    const auto mains = 3 + (rng.uniform() < 0.5f ? 0 : 1);
+    for (int i = 0; i < mains; ++i)
+    {
+        const auto side = (float) i / (float) (mains - 1) * 2.0f - 1.0f;
+        branch (-1, side * 1.1f + rng.gauss() * 0.15f, 0.5f + rng.uniform() * 0.25f, 1, 0.1f + rng.uniform() * 0.25f);
+    }
+}
+
+void PlantView::addPulse (int node, float velocity, double now)
+{
+    pulses.push_back ({ node, now, 0.4f + 0.6f * juce::jlimit (0.0f, 1.0f, velocity) });
+    if (pulses.size() > 24)
+        pulses.erase (pulses.begin());
+}
+
+void PlantView::paintRoots (juce::Graphics& g) const
+{
+    for (size_t i = 0; i < roots.size(); ++i)
+    {
+        if (rootGrowth[i] <= 0.0f)
+            continue;
+
+        g.setColour (theme::text.withAlpha (0.13f));
+        g.drawLine ({ rootFrom[i], rootTo[i] }, juce::jmax (0.5f, 1.5f - (float) roots[i].depth * 0.25f));
+    }
+}
+
+void PlantView::paintLights (juce::Graphics& g, double now) const
+{
+    const auto& nodes = session.getPlant().nodes;
+
+    for (const auto& pulse : pulses)
+    {
+        if (pulse.node >= (int) nodes.size())
+            continue;
+
+        const auto age = (float) (now - pulse.start);
+
+        // Sap: light rises from the seed through every stem up to the bud that plays.
+        std::vector<int> chain;
+        for (auto n = pulse.node; n >= 0; n = nodes[(size_t) n].parent)
+            chain.insert (chain.begin(), n);
+
+        float total = 0.0f;
+        for (size_t k = 1; k < chain.size(); ++k)
+            total += positions[(size_t) chain[k - 1]].getDistanceFrom (positions[(size_t) chain[k]]);
+
+        const auto travel = juce::jmax (0.12f, total / 1100.0f);
+        const auto head = juce::jmin (1.0f, age / travel) * total;
+        const auto sapFade = age < travel ? 1.0f : juce::jmax (0.0f, 1.0f - (age - travel) / 0.9f);
+
+        if (sapFade > 0.0f && chain.size() > 1)
+        {
+            juce::Path sap;
+            float walked = 0.0f;
+            for (size_t k = 1; k < chain.size() && walked < head; ++k)
+            {
+                const auto a = positions[(size_t) chain[k - 1]], b = positions[(size_t) chain[k]];
+                const auto segment = juce::jmax (1.0f, a.getDistanceFrom (b));
+                const auto upTo = juce::jmin (1.0f, (head - walked) / segment);
+                sap.startNewSubPath (a);
+                for (int s = 1; s <= 12; ++s)
+                    sap.lineTo (stemPoint (a, b, upTo * (float) s / 12.0f));
+                walked += segment;
+            }
+
+            // A soft halo under a bright core.
+            g.setColour (theme::text.withAlpha (0.16f * sapFade * pulse.strength));
+            g.strokePath (sap, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (theme::text.withAlpha (0.85f * sapFade * pulse.strength));
+            g.strokePath (sap, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        // Roots: a soft wave of light slides down and out, continuously.
+        const auto front = age * 150.0f;
+        const auto rootFade = juce::jmax (0.0f, 1.0f - age / (float) pulseSeconds);
+        for (size_t i = 0; i < roots.size(); ++i)
+        {
+            if (rootGrowth[i] <= 0.0f)
+                continue;
+
+            constexpr int pieces = 8;
+            const auto length = roots[i].length * rootDepth;
+            for (int s = 0; s < pieces; ++s)
+            {
+                const auto d = (rootDistance[i] + length * ((float) s + 0.5f) / (float) pieces - front) / 28.0f;
+                const auto alpha = std::exp (-d * d) * rootFade * pulse.strength;
+                if (alpha < 0.02f)
+                    continue;
+
+                const auto from = rootFrom[i] + (rootTo[i] - rootFrom[i]) * ((float) s / (float) pieces);
+                const auto to = rootFrom[i] + (rootTo[i] - rootFrom[i]) * ((float) (s + 1) / (float) pieces);
+                g.setColour (theme::text.withAlpha (alpha * 0.85f));
+                g.drawLine ({ from, to }, juce::jmax (0.5f, 1.5f - (float) roots[i].depth * 0.25f) + 0.6f);
+            }
+        }
+    }
 }
 
 void PlantView::paint (juce::Graphics& g)
@@ -91,6 +250,8 @@ void PlantView::paint (juce::Graphics& g)
         return;
 
     const auto now = nowSeconds();
+
+    paintRoots (g);
 
     // Stems.
     for (size_t i = 1; i < nodes.size(); ++i)
@@ -132,6 +293,8 @@ void PlantView::paint (juce::Graphics& g)
         }
     }
 
+    paintLights (g, now);
+
     // Played buds ripple like a drop in water.
     for (const auto& r : ripples)
     {
@@ -145,7 +308,7 @@ void PlantView::paint (juce::Graphics& g)
     }
 
     // The ground, with earlier seeds lying under it, oldest on the left.
-    const auto groundY = areaBottom + 20.0f;
+    const auto groundY = areaBottom + 6.0f;
     const auto centreX = (float) getWidth() * 0.5f;
     g.setColour (theme::line);
     g.fillRect (centreX - 90.0f, groundY, 180.0f, 1.0f);
@@ -158,7 +321,7 @@ void PlantView::paint (juce::Graphics& g)
         const auto first = centreX - gap * (float) (history.size() - 1) * 0.5f;
         for (size_t i = 0; i < history.size(); ++i)
         {
-            const juce::Point<float> spot (first + gap * (float) i, groundY + 16.0f);
+            const juce::Point<float> spot (first + gap * (float) i, areaBottom + rootDepth + 30.0f);
             historySpots.push_back (spot);
 
             if ((int) i == session.getCurrentGeneration())
@@ -218,6 +381,7 @@ void PlantView::play (int node, int note, float velocity)
     const auto pan = juce::jlimit (-0.6f, 0.6f, (positions[(size_t) node].x - (float) getWidth() * 0.5f) / ((float) getWidth() * 0.5f));
     session.audition (node, note, velocity, pan);
     ripples.push_back ({ node, nowSeconds() });
+    addPulse (node, velocity, nowSeconds());
 }
 
 void PlantView::sweep (juce::Point<float> point)

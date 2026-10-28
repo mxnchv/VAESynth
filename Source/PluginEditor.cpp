@@ -70,6 +70,7 @@ BottomBand::BottomBand (VAESynthProcessor& p)
 {
     for (auto* s : { &wild, &space, &volume })
         setupSlider (*s, *this);
+    wild.onDragEnd = [this] { if (onWildReleased) onWildReleased(); };
 
     buttonStyle::setStrong (plantButton);
     for (auto* b : { &plantButton, &backButton, &regrowButton })
@@ -221,6 +222,7 @@ VAESynthEditor::VAESynthEditor (VAESynthProcessor& p)
     bottomBand.plantButton.onClick = [this] { session.plantNode (session.getSelected()); updateInfo(); };
     bottomBand.backButton.onClick = [this] { session.goTo (session.getCurrentGeneration() - 1); updateInfo(); };
     bottomBand.regrowButton.onClick = [this] { session.regrow(); updateInfo(); };
+    bottomBand.onWildReleased = [this] { session.applyWild(); updateInfo(); };
 
     chooser.onLibrarySeed = [this] (int i) { session.chooseLibrarySeed (i); chooser.setVisible (false); updateInfo(); };
     chooser.onOwnSound = [this] { chooseFile(); };
@@ -247,7 +249,7 @@ void VAESynthEditor::resized()
     chooser.setBounds (area);
     topBand.setBounds (area.removeFromTop (topHeight));
     bottomBand.setBounds (area.removeFromBottom (bottomHeight));
-    plantView.setPlantArea ((float) topHeight + 30.0f, (float) (getHeight() - bottomHeight) - 58.0f);
+    plantView.setPlantArea ((float) topHeight + 30.0f, (float) (getHeight() - bottomHeight) - PlantView::rootDepth - 50.0f);
 }
 
 void VAESynthEditor::paintOverChildren (juce::Graphics& g)

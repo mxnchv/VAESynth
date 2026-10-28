@@ -108,6 +108,21 @@ void PlantSession::regrow()
     growCurrent();
 }
 
+void PlantSession::applyWild()
+{
+    if (! hasPlant())
+        return;
+
+    // The same rngSeed draws the same branches and the same directions, so only
+    // how far each bud moves changes, and the picked bud stays the same bud.
+    auto& generation = history[(size_t) current];
+    if (juce::approximatelyEqual (generation.wild, wild.load()))
+        return;
+
+    generation.wild = wild.load();
+    growCurrent (true);
+}
+
 void PlantSession::goTo (int generationIndex)
 {
     if (generationIndex < 0 || generationIndex >= (int) history.size() || generationIndex == current)
@@ -180,12 +195,15 @@ void PlantSession::pushGeneration (Generation generation)
     growCurrent();
 }
 
-void PlantSession::growCurrent()
+void PlantSession::growCurrent (bool keepSelection)
 {
     const auto& generation = history[(size_t) current];
     plant = vae::Plant::grow (generation.traits, generation.wild, generation.rngSeed, engine);
-    selected = -1;
+    if (! keepSelection || selected >= (int) plant.nodes.size())
+        selected = -1;
     ++plantVersion;
+    if (! keepSelection)
+        ++shapeVersion;
 
     // Render in the order the buds appear, so the seed is ready first.
     std::vector<int> order ((size_t) plant.nodes.size());
@@ -206,7 +224,7 @@ void PlantSession::growCurrent()
         jobTraits = std::move (traits);
         jobOrder = std::move (order);
         sounds.assign (plant.nodes.size(), nullptr);
-        playableNode = 0;
+        playableNode = juce::jmax (0, selected);
         publishPlayable();
     }
 
@@ -313,10 +331,32 @@ juce::ValueTree PlantSession::toValueTree() const
     tree.setProperty ("current", current, nullptr);
     tree.setProperty ("selected", selected, nullptr);
 
+    // Each sound file is stored once, with its audio, and generations point to it.
+    std::map<const vae::SeedSource*, int> sourceIds;
+    for (const auto& g : history)
+    {
+        if (g.source->kind != vae::SeedSource::Kind::sample || sourceIds.count (g.source.get()) > 0)
+            continue;
+
+        const auto id = (int) sourceIds.size();
+        sourceIds[g.source.get()] = id;
+
+        juce::ValueTree source ("Source");
+        source.setProperty ("id", id, nullptr);
+        source.setProperty ("name", g.source->name, nullptr);
+        source.setProperty ("file", g.source->file.getFullPathName(), nullptr);
+        source.setProperty ("root", g.source->rootNote, nullptr);
+        source.setProperty ("pitched", g.source->pitched, nullptr);
+        source.setProperty ("audio", g.source->embeddedAudio, nullptr);
+        tree.appendChild (source, nullptr);
+    }
+
     for (const auto& g : history)
     {
         juce::ValueTree child ("Generation");
         const auto isSample = g.source->kind == vae::SeedSource::Kind::sample;
+        if (isSample)
+            child.setProperty ("source", sourceIds[g.source.get()], nullptr);
         child.setProperty ("kind", isSample ? "sample" : "library", nullptr);
         child.setProperty ("library", g.source->libraryIndex, nullptr);
         child.setProperty ("file", isSample ? g.source->file.getFullPathName() : juce::String(), nullptr);
@@ -333,18 +373,32 @@ juce::ValueTree PlantSession::toValueTree() const
 
 void PlantSession::restore (const juce::ValueTree& tree)
 {
-    if (! tree.hasType ("Plant") || tree.getNumChildren() == 0)
+    if (! tree.hasType ("Plant") || tree.getChildWithName ("Generation").isValid() == false)
         return;
 
     std::vector<Generation> restored;
     std::map<juce::String, vae::SeedSourcePtr> loaded;
 
+    // Sounds saved inside the session: they play even if the file is gone.
+    std::map<int, vae::SeedSourcePtr> embedded;
+    for (const auto& source : tree)
+        if (source.hasType ("Source"))
+            embedded[(int) source["id"]] = vae::decodeSampleSource (source["audio"].toString(), source["name"].toString(),
+                                                                     juce::File (source["file"].toString()),
+                                                                     (int) source.getProperty ("root", 60), (bool) source["pitched"]);
+
     for (const auto& child : tree)
     {
+        if (! child.hasType ("Generation"))
+            continue;
+
         Generation g;
         if (child["kind"].toString() == "sample")
         {
             const auto path = child["file"].toString();
+            if (child.hasProperty ("source") && embedded[(int) child["source"]] != nullptr)
+                loaded[path] = embedded[(int) child["source"]];
+
             if (loaded.count (path) == 0)
             {
                 juce::String error;
