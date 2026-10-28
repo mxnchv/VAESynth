@@ -51,6 +51,7 @@ namespace vae
 
         // Renders the node at the source's own note (`RenderedSound::rootNote`).
         // A sample seed with neutral traits comes back exactly as loaded.
+        // May return nullptr when it cannot render: the bud then stays unlit.
         virtual RenderedSound::Ptr render (const Traits&, const SeedSource&) const = 0;
     };
 

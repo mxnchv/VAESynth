@@ -272,6 +272,10 @@ void PlantSession::run()
             if (renderJob != job)
                 break;
 
+            // An engine that could not render this bud leaves it unlit and silent.
+            if (sound == nullptr)
+                continue;
+
             sounds[(size_t) index] = sound;
             keepAlive.push_back (sound);
             if (index == playableNode)
