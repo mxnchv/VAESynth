@@ -10,7 +10,10 @@ Fecha: 28–29 de octubre de 2026. Paso 1 del experimento (cuaderno offline, sin
 
 - **Modelo:** VAE de Stable Audio Open (`stabilityai/stable-audio-open-1.0`, subcarpeta `vae`). Solo el autoencoder. Licencia Stability AI Community.
 - **Sonidos:** NSynth, parte `test` (4.096 notas, 16 kHz, CC BY 4.0). Se eligió NSynth en lugar de la librería de Monchu.
-- **Configuración:** `config_v001.json`. Unas 400 notas repartidas entre familias de instrumento, MIDI 36–84, `SPREAD = 3`.
+- **Configuración:** `configs/config_v001.json`. 400 notas repartidas entre familias de instrumento, MIDI 36–84, `SPREAD = 3`.
+  - Las 11 direcciones explican el **67 %** de la variación entre sonidos.
+  - La dirección "brillante" explica el **78 %** del brillo (R² = 0,78) dentro de esas 400 notas. Es un buen ajuste.
+  - Recorrer `d` de un extremo a otro de las coordenadas equivaldría a unas 6 octavas de centroide según la recta ajustada. Es una extrapolación lineal, no una medida.
 - **Mutación:** `sigma = 1.0`, `lean_k = 1.2`, `leash = 0` (sin correa hacia la semilla).
 - **Semillas:** una nota por familia cerca de MIDI 60, en total 10. Cada una con Wild 0, 0,5 y 1, `rngSeed = 1`. Las 30 plantas tienen la misma forma (80 brotes), porque comparten `rngSeed`.
 - **Entorno:** Google Colab con GPU.
@@ -43,7 +46,7 @@ La distancia es una distancia espectral logarítmica multirresolución (0 = idé
 
 **Lo que todavía no sabemos:**
 
-1. **"Derecha = más brillante" solo funciona con Wild bajo.** La correlación es positiva con Wild 0 en 9 de 10 semillas, pero se pierde con Wild 0,5 y 1 (solo el bajo y la voz la mantienen). Hipótesis: la dirección "brillante" es lineal y solo vale cerca de la semilla. Con pasos grandes mandan el ruido aleatorio y lo que hace el decoder lejos de los sonidos plausibles.
+1. **"Derecha = más brillante" solo funciona con Wild bajo.** La correlación es positiva con Wild 0 en 9 de 10 semillas, pero se pierde con Wild 0,5 y 1 (solo el bajo y la voz la mantienen). Entre las notas reales la dirección sí predice bien el brillo (R² = 0,78), así que el problema no está en la dirección. Hipótesis: el ajuste es lineal y solo vale cerca de los sonidos reales; con pasos grandes mandan el ruido aleatorio y lo que hace el decoder lejos de los sonidos plausibles.
 2. **Saltos bruscos entre los niveles 2 y 3 con Wild alto** en mallet, guitarra y órgano. Con Wild 1 es lo que se busca, pero hay que vigilar que no suene roto.
 3. **Si la "demencia" de Wild 1 conserva algo de la semilla** (decisión D2). Monchu lo ha aprobado escuchando; conviene seguir atentos en el plugin.
 4. **Sonidos que no son notas de instrumento** (voces, objetos) y **calidad completa**: NSynth no tiene nada por encima de 8 kHz.
