@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            # Universal binary: Apple Silicon + Intel
+            configure_args: -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          - name: Windows
+            os: windows-latest
+            configure_args: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.configure_args }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: VAESynth-${{ matrix.name }}
+          path: |
+            build/VAESynth_artefacts/Release/VST3
+            build/VAESynth_artefacts/Release/AU
+            build/VAESynth_artefacts/Release/CLAP
+            build/VAESynth_artefacts/Release/Standalone
+          if-no-files-found: error
