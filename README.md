@@ -53,7 +53,13 @@ bash packaging/macos/build-and-install.sh
 Compila e instala VST3, AU, CLAP y la app Standalone. La primera vez tarda unos
 minutos (descarga JUCE); después, segundos. Reinicia el DAW y haz un rescan.
 
-### Descargando la versión que compila GitHub
+### Descargando una versión publicada (recomendado si no compilas)
+
+En GitHub, columna de la derecha → **Releases**. Cada versión (por ejemplo `beta-0.3`)
+tiene `VAESynth-macOS.zip` y `VAESynth-Windows.zip`, y no caducan: es el punto de retorno
+si una versión nueva no os convence. Se instalan igual que lo de abajo.
+
+### Descargando la versión que compila GitHub en cada cambio
 
 1. En GitHub, pestaña **Actions** → la ejecución más reciente de **Build** de tu rama.
 2. Abajo, en **Artifacts**, descarga `VAESynth-macOS` o `VAESynth-Windows`.
