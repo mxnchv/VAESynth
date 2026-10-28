@@ -32,11 +32,17 @@ from pathlib import Path
 IN_COLAB = "google.colab" in sys.modules
 
 # Carpeta experimental/pretrained_server del repositorio (rama experiment/pretrained-engine).
-# En Colab: copia esa carpeta a tu Drive (o clona la rama ahí) y ajusta la ruta.
+# En Colab se busca sola en tu Drive: vale cualquier nombre para la carpeta donde clonaste la rama
+# (p. ej. MyDrive/VAESynth o MyDrive/VAESynthmxnchv). Si hay varias, se usa la modificada más recientemente.
 if IN_COLAB:
     from google.colab import drive
     drive.mount("/content/drive")
-    PACKAGE_DIR = Path("/content/drive/MyDrive/VAESynth/experimental/pretrained_server")
+    found = sorted(Path("/content/drive/MyDrive").glob("*/experimental/pretrained_server/vaesynth_exp"),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    if not found:
+        raise FileNotFoundError("No encuentro experimental/pretrained_server en tu Drive. Clona la rama en MyDrive/<carpeta>.")
+    PACKAGE_DIR = found[0].parent
+    print("Usando", PACKAGE_DIR, "(otras:", [str(p.parent) for p in found[1:]], ")" if found[1:] else "")
     import subprocess
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(PACKAGE_DIR / "requirements.txt")], check=True)
 else:

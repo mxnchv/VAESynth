@@ -83,8 +83,8 @@ Por decisión del equipo, el experimento usa **NSynth** (Magenta, licencia CC BY
 
 ## Cómo usarlo
 
-1. Tener esta carpeta en Google Drive (clonando la rama) o en local.
-2. Abrir el cuaderno en Colab con GPU (o en local). Si la carpeta está en `MyDrive/VAESynth/...`, las rutas ya están bien.
+1. Tener esta carpeta en Google Drive (clonando la rama en `MyDrive/<cualquier nombre>`; el cuaderno la encuentra solo) o en local.
+2. Abrir el cuaderno en Colab con GPU (o en local).
 3. Ejecutarlo. Descarga NSynth, calcula una configuración nueva y hace crecer las plantas de las semillas con Wild 0, 0,5 y 1.
 4. Abrir `OUTPUT_DIR/config_vNNN/index.html`. Cada planta tiene su página: la semilla, la reconstrucción D(E(x)) y los brotes por nivel, ordenados de izquierda (oscuro) a derecha (brillante).
 
