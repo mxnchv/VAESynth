@@ -20,6 +20,10 @@ POST /render?key=<key>&coords=<11 comma-separated floats>
      A node equal to the seed (coords = sampleNeutral or a library patch)
      returns the seed itself, at 44.1 kHz.
 
+Every parameter can also go in a header instead of the query string:
+X-VAE-Key, X-VAE-Rate, X-VAE-Channels, X-VAE-Coords. The plugin's adapter
+uses the headers.
+
 Errors are JSON {"error": ...} with a 4xx/5xx status. The adapter treats any
 error or timeout as "this bud stays unlit" (render() returns nullptr).
 
@@ -130,7 +134,13 @@ def make_handler(engine: Engine):
             self.wfile.write(body)
 
         def _query(self) -> dict:
-            return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            """Parameters from the query string, or from X-VAE-<Name> headers (what the plugin sends)."""
+            params = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            for name in ("key", "rate", "channels", "coords"):
+                value = self.headers.get(f"X-VAE-{name.capitalize()}")
+                if name not in params and value is not None:
+                    params[name] = value
+            return params
 
         def do_GET(self):
             if urlparse(self.path).path == "/info":

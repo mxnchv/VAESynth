@@ -121,3 +121,37 @@ if(VAESYNTH_BUILD_TESTS)
 
     add_test(NAME processor COMMAND VAESynthProcessorTests)
 endif()
+
+# EXPERIMENTAL (branch experiment/pretrained-engine, see experimental/README.md):
+# an engine whose buds come from a pretrained model running in a local server.
+# Off by default; with it off the plugin builds exactly as before.
+option(VAESYNTH_EXPERIMENTAL_PRETRAINED "Use the experimental pretrained-model engine (needs experimental/pretrained_server running)" OFF)
+
+if(VAESYNTH_EXPERIMENTAL_PRETRAINED)
+    target_sources(VAESynth PRIVATE Source/experimental/PretrainedVariationEngine.cpp)
+    target_compile_definitions(VAESynth PUBLIC VAESYNTH_EXPERIMENTAL_PRETRAINED=1)
+
+    if(VAESYNTH_BUILD_TESTS)
+        juce_add_console_app(VAESynthExperimentalTests PRODUCT_NAME "VAESynthExperimentalTests")
+
+        target_sources(VAESynthExperimentalTests PRIVATE
+            ${VAESYNTH_ENGINE_SOURCES}
+            Source/experimental/PretrainedVariationEngine.cpp
+            Source/experimental/ExperimentalEngineTests.cpp)
+
+        target_compile_definitions(VAESynthExperimentalTests PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0)
+
+        target_link_libraries(VAESynthExperimentalTests
+            PRIVATE
+                juce::juce_audio_formats
+                juce::juce_data_structures
+                juce::juce_dsp
+            PUBLIC
+                juce::juce_recommended_config_flags
+                juce::juce_recommended_warning_flags)
+
+        add_test(NAME experimental COMMAND VAESynthExperimentalTests)
+    endif()
+endif()

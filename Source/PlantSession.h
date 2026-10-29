@@ -5,6 +5,9 @@
 #include <juce_events/juce_events.h>
 
 #include "engine/Plant.h"
+#if VAESYNTH_EXPERIMENTAL_PRETRAINED  // experimental engine, off by default (see experimental/README.md)
+ #include "experimental/PretrainedVariationEngine.h"
+#endif
 
 #include <array>
 #include <atomic>
@@ -101,7 +104,11 @@ private:
     static std::uint32_t newRngSeed();
 
     std::atomic<float>& wild;
+#if VAESYNTH_EXPERIMENTAL_PRETRAINED
+    vae::PretrainedVariationEngine engine;  // experimental: buds from a local server (see experimental/README.md)
+#else
     vae::DspVariationEngine engine;
+#endif
     juce::AudioFormatManager formats;
 
     std::vector<Generation> history;

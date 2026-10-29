@@ -114,6 +114,18 @@ def test_max_seconds_and_silent_tail():
     assert engine.render("tail", CENTRE + 0.1).shape[1] <= int(0.6 * SAMPLE_RATE)  # the silence is not rendered
 
 
+def test_parameters_in_headers(server):
+    tone = (0.3 * np.sin(2 * np.pi * 220 * np.arange(22050) / 44100)).astype("<f4")
+    seed = urllib.request.Request(server + "/seed", data=tone.tobytes(), method="POST",
+                                  headers={"X-VAE-Key": "h", "X-VAE-Rate": "44100", "X-VAE-Channels": "1"})
+    with urllib.request.urlopen(seed, timeout=10) as response:
+        assert response.status == 200
+    render = urllib.request.Request(server + "/render", data=b"", method="POST",
+                                    headers={"X-VAE-Key": "h", "X-VAE-Coords": coords_query(CENTRE + 0.1)})
+    with urllib.request.urlopen(render, timeout=10) as response:
+        assert response.status == 200 and int(response.headers["X-Channels"]) == 1
+
+
 def test_errors(server):
     assert call(f"{server}/render?key=nope&coords={coords_query(CENTRE)}", b"")[0] == 404
     assert call(f"{server}/render?key=nope&coords=1,2,3", b"")[0] == 400

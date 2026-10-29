@@ -97,19 +97,55 @@ La CPU fue unas 1,7 veces más rápida que la GPU. La causa probable: el *weight
 1. **El *weight norm* se fusiona una vez al cargar el modelo.** Comprobado: produce exactamente el mismo audio. Puede hacer que la GPU deje de caer a la CPU.
 2. **El servidor usa la CPU por defecto.** `--device mps` para probar la GPU.
 3. **Se recorta el final silencioso de la semilla** (60 dB por debajo de su pico) y solo se codifica lo que se va a usar.
-4. **Nueva opción `--max-seconds`**: la duración máxima de un brote. El tiempo de cálculo es proporcional a la duración, así que es la palanca más grande. Es una decisión de producto (brotes más cortos), por eso por defecto sigue en 4,5 s.
+4. **Nueva opción `--max-seconds`**: la duración máxima de un brote.
 
-**Segunda medición (pendiente):** `git pull`, volver a ejecutar `mac/instalar.sh` (añade `accelerate`; no rehace lo que ya está) y después `mac/medir_velocidad.sh`. Mandad la salida a Fer.
+**Segunda medición (29 oct, con las mejoras):**
 
-### 3.7 Arrancar el servidor (para el paso 3)
+| Brotes de hasta | CPU por brote | CPU, planta de 65 | GPU (MPS) por brote |
+|---|---|---|---|
+| 4,5 s | 1,69 s | 110 s | 3,30 s |
+| 3 s | 1,32 s | 86 s | 3,46 s |
+| 2 s | 1,05 s | 68 s | 1,66 s |
 
-### 3.6 Arrancar el servidor (para el paso 3)
+La CPU sigue siendo la más rápida. El coste no es proporcional a la duración: hay unos 0,4 s fijos por brote.
 
-```sh
-bash experimental/pretrained_server/mac/arrancar_servidor.sh
-```
+**Decisión de Monchu: brotes de hasta 3 s, con la CPU.** Es lo que usa `mac/arrancar_servidor.sh` por defecto.
 
-Se queda escuchando en `http://127.0.0.1:8765` hasta pulsar Ctrl+C. Por ahora no hace falta: el plugin todavía no sabe hablar con él.
+### 3.7 Paso 3: probar el plugin con el motor experimental
+
+El plugin se compila con la opción `VAESYNTH_EXPERIMENTAL_PRETRAINED` encendida, **solo como app Standalone** y dentro de `build/experimental` de la carpeta del experimento. **No se instala nada**: el VAESynth normal de los DAW no cambia.
+
+1. Traer los cambios: `git pull` en la carpeta del experimento.
+2. **Terminal 1**, arrancar el servidor y dejarlo abierto:
+   ```sh
+   bash experimental/pretrained_server/mac/arrancar_servidor.sh
+   ```
+   Espera a ver `Escuchando en http://127.0.0.1:8765`.
+3. **Terminal 2**, compilar y probar. La primera vez tarda unos minutos:
+   ```sh
+   bash experimental/pretrained_server/mac/compilar_plugin_experimental.sh
+   ```
+   Al final ejecuta los tests del motor experimental contra el servidor; todos deben dar `ok`.
+4. Abrir la app con la orden que imprime el script (`open ".../VAESynth.app"`).
+
+**Qué esperar en la app:**
+
+- **Arranca siempre el servidor antes que la app.** Si la planta crece sin servidor, los brotes se quedan apagados y "derecha = más brillante" no tiene dirección en esa planta. Arranca el servidor y pulsa Regrow.
+- **La semilla suena como siempre** (el archivo tal cual), con o sin servidor.
+- **Los brotes se encienden poco a poco**: unos 1–2 s para codificar la semilla y unos 1,3 s por brote. Una planta media tarda alrededor de un minuto y medio en encenderse entera.
+- **Al soltar Wild se recalcula toda la planta**: otra vez esa espera. Es lo esperado, no un fallo.
+- Los nombres de los brotes ("Brighter, shorter"…) no significan nada con este motor: se calculan como si fueran los rasgos DSP.
+- En la Terminal 1 se ve cada semilla y cada brote que se calcula, con su tiempo.
+
+**Qué apuntar** (para Fer):
+
+- Qué sorprende, qué aburre y qué suena roto.
+- Si la "demencia" de Wild alto conserva algo de la semilla.
+- Si la derecha suena más brillante.
+- Cómo se vive la espera.
+- Y la comparación con la beta DSP con las mismas semillas.
+
+**Probarlo dentro de un DAW (opcional, con cuidado):** instalar esta versión **sustituye** al VAESynth normal en los DAW, porque comparten identificador. Si queréis hacerlo: compilar también los formatos de plugin (`cmake --build build/experimental --config Release`) y ejecutar `bash packaging/macos/install.sh build/experimental/VAESynth_artefacts/Release`. Para volver al normal, ejecutar `packaging/macos/build-and-install.sh` desde la copia de `claude/plant-beta`.
 
 ## 4. Si algo falla
 

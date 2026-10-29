@@ -9,7 +9,11 @@ Está pensado como un USB: se enchufa, se prueba y se quita sin que cambie nada 
 Las reglas y los ajustes acordados están en [`../README.md`](../README.md) (`experimental/README.md`). Si algo de este archivo lo contradice, manda aquel.
 
 - **Paso 1 (cuaderno de escucha): hecho y aprobado.** Ver [`RESULTADOS_RONDA1.md`](RESULTADOS_RONDA1.md).
-- **Paso actual: 2 (servidor local y medición de velocidad en el M1 de Monchu).** Ver [`GUIA_MAC.md`](GUIA_MAC.md). No se ha tocado ningún archivo del plugin.
+- **Paso 2 (servidor local y medición en el M1 de Monchu): hecho.** Decisión: CPU y brotes de hasta 3 s. Ver [`GUIA_MAC.md`](GUIA_MAC.md) §3.6.
+- **Paso actual: 3 (el plugin con el motor experimental).** Ver [`GUIA_MAC.md`](GUIA_MAC.md) §3.7.
+  - El adaptador está en `Source/experimental/PretrainedVariationEngine.{h,cpp}`, con sus tests en `Source/experimental/ExperimentalEngineTests.cpp`.
+  - Solo se tocan dos archivos del plugin, y siempre detrás de la opción `VAESYNTH_EXPERIMENTAL_PRETRAINED` (apagada por defecto): un bloque al final de `CMakeLists.txt` y la declaración del motor (con su `#include`) en `Source/PlantSession.h`. Con la opción apagada, el plugin compila exactamente como antes.
+  - El adaptador implementa la interfaz `VariationEngine` actual sin cambiarla. Hace crecer la planta en C++ (la misma fórmula que `plant.py`) y pide el audio de cada brote al servidor por un socket TCP a `127.0.0.1`. Si el servidor no está o falla, el brote se queda apagado (`nullptr`).
 - Los pesos del modelo, los tokens y los audios de la librería **nunca** se suben al repositorio.
 - Sin RAVE por ahora, por su licencia.
 - **Comparar con la beta DSP:** las mismas semillas se escuchan en el plugin actual cargándolas como semilla. El cuaderno no reproduce el motor DSP, que está en C++.
